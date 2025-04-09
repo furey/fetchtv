@@ -157,17 +157,20 @@ const printRecordings = (recordings, { jsonOutput }) => {
   const sortedRecordings = sortRecordingsByTitle(recordings)
 
   if (jsonOutput) {
-    const output = sortedRecordings.map(rec => ({
-      id: rec.id,
-      title: rec.title,
-      items: rec.items?.map(formatItem) ?? null
-    }))
+    const output = sortedRecordings.map(rec => {
+      const item = {
+        id: rec.id,
+        title: rec.title
+      }
+      if (!argv.shows) item.items = rec.items?.map(formatItem)
+      return item
+    })
     console.log(JSON.stringify(output, null, 2))
     return
   }
 
-  const context = argv.shows ? 'shows' : 'recordings'
-  logHeading(`Listing ${context}…`)
+  const context = argv.shows ? 'Shows' : 'Recordings'
+  logHeading(`Listing ${context}`)
   if (!sortedRecordings || sortedRecordings.length === 0) {
     logWarning(`No ${context} found matching criteria!`)
     return
@@ -207,7 +210,7 @@ const createProgressBarFormat = (title) =>
   `Downloading ${title.slice(0, 25).padEnd(25)} |${chalk.cyan('{bar}')}| {percentage}% || {value}/{total} Bytes || Speed: {speed}`
 
 const saveRecordings = async (recordings, { savePath, overwrite }) => {
-  logHeading('Saving recordings')
+  logHeading('Saving Recordings')
   const savedFilesDb = await loadSavedFiles(savePath)
   const jsonResults = []
   const tasks = []
