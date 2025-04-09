@@ -123,9 +123,7 @@ const main = async () => {
         }
 
         const jsonResult = await saveRecordings(recordings, { savePath, overwrite: argv.overwrite })
-        if (argv.json) {
-          console.log(JSON.stringify(jsonResult, null, 2))
-        }
+        if (argv.json) console.log(JSON.stringify(jsonResult, null, 2))
       } catch (saveError) {
         logError(`Error during save process: ${saveError.message}`)
         if (argv.debug) console.error(saveError.stack)
@@ -182,32 +180,14 @@ const printRecordings = (recordings, { jsonOutput }) => {
     if (recording.items && recording.items.length > 0) {
       recording.items.forEach(item => {
         const durationStr = new Date(item.duration * 1000).toISOString().substr(11, 8)
-        const sizeMB = item.size > 0 ? (item.size / (1024 * 1024)).toFixed(2) : '0.00'
-        log(`  ${chalk.whiteBright(item.title)} (${chalk.gray(`${durationStr}, ${sizeMB} MB`)})`)
+        const sizeFormatted = formatBytes(item.size)
+        log(`  ${chalk.whiteBright(item.title)} (${chalk.gray(`${durationStr}, ${sizeFormatted}`)})`)
       })
     } else {
       if (!argv.shows) log(chalk.gray('  (No items listed based on current filters)'))
     }
   })
 }
-
-const sortRecordingsByTitle = (recordings) =>
-  [...recordings]
-    .map(recording => {
-      const recordingCopy = { ...recording }
-      const title = recordingCopy.title.toLowerCase()
-      recordingCopy.sortTitle = title.startsWith('the ') ? title.slice(4) : title
-      return recordingCopy
-    })
-    .sort((a, b) => a.sortTitle.localeCompare(b.sortTitle))
-    .map(recording => {
-      const { sortTitle, ...rest } = recording
-      return rest
-    })
-
-// Helper to create the progress bar format string
-const createProgressBarFormat = (title) =>
-  `Downloading ${title.slice(0, 25).padEnd(25)} |${chalk.cyan('{bar}')}| {percentage}% || {value}/{total} Bytes || Speed: {speed}`
 
 const saveRecordings = async (recordings, { savePath, overwrite }) => {
   logHeading('Saving Recordings')
@@ -237,12 +217,12 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
     return jsonResults
   }
 
-  log(`Preparing to download ${tasks.length} new recordings...`)
+  log(`Preparing to download ${tasks.length} new recordings…`)
 
   const multiBar = new cliProgress.MultiBar({
     clearOnComplete: false,
     hideCursor: true,
-    format: ' {bar} | {percentage}% | ETA: {eta}s | {value}/{total} | {filename}'
+    format: ' {bar} | {percentage}% | {filename}'
   }, cliProgress.Presets.shades_classic)
 
   const activePromises = new Set()
@@ -252,10 +232,16 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
       await Promise.race(activePromises)
     }
 
-    const progressBar = multiBar.create(0, 0, {
+    const initialTotalLength = task.item.size || 0
+    const progressBar = multiBar.create(initialTotalLength, 0, {
         filename: path.basename(task.filePath),
-        format: createProgressBarFormat(task.item.title)
+        speed: 'N/A',
+        formattedEta: 'N/A',
+        formattedValue: formatBytes(0),
+        formattedTotal: formatBytes(initialTotalLength)
     })
+
+    progressBar.options.format = createProgressBarFormat(task.item.title)
 
     const promise = downloadFile(task.item, task.filePath, progressBar)
 
@@ -308,7 +294,7 @@ const discoverFetch = async ({ ip, port }) => {
       client.stop()
     } catch (err) {
       logError(`SSDP discovery failed: ${err.message}`)
-      client.stop() // Ensure client is stopped on error
+      client.stop()
       return null
     }
   }
@@ -588,7 +574,7 @@ const addSavedFile = async (savePath, savedFilesDb, item) => {
   }
 }
 
-const downloadFile = async (item, filePath, progressBar) => { // Accept progressBar instance
+const downloadFile = async (item, filePath, progressBar) => {
   const lockFilePath = `${filePath}${CONST_LOCK}`
 
   let writer = null
@@ -597,7 +583,7 @@ const downloadFile = async (item, filePath, progressBar) => { // Accept progress
   try {
     if (fsc.existsSync(lockFilePath)) {
       logWarning(`Already writing ${item.title} (lock file exists), skipping.`)
-      if (progressBar) progressBar.stop() // Stop the bar if provided
+      if (progressBar) progressBar.stop()
       return { recorded: false, warning: 'Already writing (lock file exists) skipping' }
     }
 
@@ -633,23 +619,38 @@ const downloadFile = async (item, filePath, progressBar) => { // Accept progress
 
     if (progressBar) {
       progressBar.setTotal(totalLength)
-      progressBar.update(0, { speed: 'N/A' })
+      progressBar.update(0, {
+          speed: 'N/A',
+          formattedEta: 'N/A',
+          formattedValue: formatBytes(0),
+          formattedTotal: formatBytes(totalLength)
+      })
     }
 
     let downloadedLength = 0
-    let lastUpdateTime = Date.now()
+    let lastUpdateTime = progressBar?.startTime || Date.now()
 
     responseStream.on('data', (chunk) => {
       downloadedLength += chunk.length
       if (progressBar) {
         const now = Date.now()
+        const startTime = progressBar.startTime || lastUpdateTime
         if (now - lastUpdateTime > 250 || downloadedLength === totalLength) {
-          const elapsedSeconds = (now - progressBar.startTime) / 1000
+          const elapsedSeconds = (now - startTime) / 1000
           const speed = elapsedSeconds > 0 ? downloadedLength / elapsedSeconds : 0
+          const bytesRemaining = totalLength - downloadedLength
+          const etaSeconds = (speed > 0 && bytesRemaining > 0) ? bytesRemaining / speed : Infinity
+
+          const formattedSpeedString = formatSpeed(speed)
+          const formattedEtaString = formatEta(etaSeconds)
+          const formattedValueString = formatBytes(downloadedLength)
+
           progressBar.update(downloadedLength, {
-              speed: `${cliProgress.Format.bytes(speed)}/s`,
-              value: downloadedLength
+              speed: formattedSpeedString,
+              formattedEta: formattedEtaString,
+              formattedValue: formattedValueString
           })
+
           lastUpdateTime = now
         }
       }
@@ -804,6 +805,23 @@ const parseXml = (xmlString) => {
   }
 }
 
+const sortRecordingsByTitle = (recordings) =>
+  [...recordings]
+    .map(recording => {
+      const recordingCopy = { ...recording }
+      const title = recordingCopy.title.toLowerCase()
+      recordingCopy.sortTitle = title.startsWith('the ') ? title.slice(4) : title
+      return recordingCopy
+    })
+    .sort((a, b) => a.sortTitle.localeCompare(b.sortTitle))
+    .map(recording => {
+      const { sortTitle, ...rest } = recording
+      return rest
+    })
+
+const createProgressBarFormat = (title) =>
+  `Downloading ${title.slice(0, 25).padEnd(25)} |${chalk.cyan('{bar}')}| {percentage}% | ETA: {formattedEta} | {formattedValue}/{formattedTotal} | Speed: {speed}`
+
 const getXmlAttr = (node, attrName, defaultValue = '') =>
   node?.[`@_${attrName}`] ?? defaultValue
 
@@ -829,7 +847,7 @@ const createValidFilename = (filename = '') => {
   result = result.replace(/\s+/g, '_')
   result = result.replace(/\.(?![^.]*$)/g, '_')
   if (result === '.' || result === '..') result = '_'
-  return result.slice(0, MAX_FILENAME - 5)
+  return result.slice(0, MAX_FILENAME - 10)
 }
 
 const tsToSeconds = (ts = '0') => {
@@ -844,6 +862,44 @@ const tsToSeconds = (ts = '0') => {
     return 0
   }
 }
+
+const formatBytes = (bytes, decimals = 1) => {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B'
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const dm = decimals < 0 ? 0 : decimals
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  const unitIndex = Math.min(i, sizes.length - 1)
+  const displayDecimals = unitIndex === 0 ? 0 : dm
+  return `${parseFloat((bytes / Math.pow(k, unitIndex)).toFixed(displayDecimals))} ${sizes[unitIndex]}`
+}
+
+const formatSpeed = (bytesPerSecond, decimals = 1) => {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond < 0) return '0 B/s'
+  const k = 1024
+  const dm = decimals < 0 ? 0 : decimals
+  const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s']
+  if (bytesPerSecond < 1) return `0 ${sizes[0]}`
+  const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k))
+  const unitIndex = Math.min(i, sizes.length - 1)
+  const displayDecimals = unitIndex === 0 ? 0 : dm
+  return `${parseFloat((bytesPerSecond / Math.pow(k, unitIndex)).toFixed(displayDecimals))} ${sizes[unitIndex]}`
+}
+
+const formatEta = (seconds) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return 'N/A'
+  if (seconds === Infinity) return '∞'
+  if (seconds < 1) return '0s'
+
+  const totalSeconds = Math.round(seconds)
+  const minutes = Math.floor(totalSeconds / 60)
+  const remainingSeconds = totalSeconds % 60
+
+  if (minutes === 0) return `${remainingSeconds}s`
+  return `${minutes}m ${remainingSeconds}s`
+}
+
 
 const log = (message) => console.log(message)
 const logWarning = (message) => console.log(chalk.yellow.bold(message))
