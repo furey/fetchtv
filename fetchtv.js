@@ -25,6 +25,7 @@ const BROWSE_RETRY_DELAY = 1500
 const BROWSE_INTER_DELAY = 150
 const ISRECORDING_CHECK_DELAY = 200
 const SAVE_FILE_NAME = 'fetchtv.json'
+const MAX_CONCURRENT_DOWNLOADS = 3
 const FETCHTV_PORT = 49152
 const CONST_LOCK = '.lock'
 const MAX_FILENAME = 255
@@ -127,6 +128,7 @@ const main = async () => {
         }
       } catch (saveError) {
         logError(`Error during save process: ${saveError.message}`)
+        if (argv.debug) console.error(saveError.stack)
         process.exit(1)
       }
     }
@@ -200,33 +202,26 @@ const sortRecordingsByTitle = (recordings) =>
       return rest
     })
 
+// Helper to create the progress bar format string
+const createProgressBarFormat = (title) =>
+  `Downloading ${title.slice(0, 25).padEnd(25)} |${chalk.cyan('{bar}')}| {percentage}% || {value}/{total} Bytes || Speed: {speed}`
+
 const saveRecordings = async (recordings, { savePath, overwrite }) => {
   logHeading('Saving recordings')
-  let someToRecord = false
   const savedFilesDb = await loadSavedFiles(savePath)
   const jsonResults = []
+  const tasks = []
 
   for (const show of recordings) {
     if (!show.items || show.items.length === 0) continue
 
-    const showDirName = createValidFilename(show.title)
-    const showDirPath = path.join(savePath, showDirName)
-
     for (const item of show.items) {
       if (overwrite || !savedFilesDb[item.id]) {
-        someToRecord = true
+        const showDirName = createValidFilename(show.title)
+        const showDirPath = path.join(savePath, showDirName)
         const itemFileName = `${createValidFilename(item.title)}.mpeg`
         const filePath = path.join(showDirPath, itemFileName)
-
-        log(`\nPreparing to save: ${show.title} / ${item.title}`)
-        const downloadResult = await downloadFile(item, filePath)
-        const resultEntry = { item: formatItem(item), recorded: downloadResult.recorded }
-        if (downloadResult.warning) resultEntry.warning = downloadResult.warning
-        if (downloadResult.error) resultEntry.error = downloadResult.error
-
-        jsonResults.push(resultEntry)
-
-        if (downloadResult.recorded) await addSavedFile(savePath, savedFilesDb, item)
+        tasks.push({ item, filePath, showDirPath, showTitle: show.title })
       } else {
         log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
         if (argv.json) jsonResults.push({ item: formatItem(item), recorded: false, warning: 'Skipped (already saved)' })
@@ -234,7 +229,59 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
     }
   }
 
-  if (!someToRecord) log('There is nothing new to record.')
+  if (tasks.length === 0) {
+    log('There is nothing new to record.')
+    return jsonResults
+  }
+
+  log(`Preparing to download ${tasks.length} new recordings...`)
+
+  const multiBar = new cliProgress.MultiBar({
+    clearOnComplete: false,
+    hideCursor: true,
+    format: ' {bar} | {percentage}% | ETA: {eta}s | {value}/{total} | {filename}'
+  }, cliProgress.Presets.shades_classic)
+
+  const activePromises = new Set()
+
+  for (const task of tasks) {
+    while (activePromises.size >= MAX_CONCURRENT_DOWNLOADS) {
+      await Promise.race(activePromises)
+    }
+
+    const progressBar = multiBar.create(0, 0, {
+        filename: path.basename(task.filePath),
+        format: createProgressBarFormat(task.item.title)
+    })
+
+    const promise = downloadFile(task.item, task.filePath, progressBar)
+
+    const wrappedPromise = promise
+      .then(async (downloadResult) => {
+        const resultEntry = { item: formatItem(task.item), recorded: downloadResult.recorded }
+        if (downloadResult.warning) resultEntry.warning = downloadResult.warning
+        if (downloadResult.error) resultEntry.error = downloadResult.error
+
+        jsonResults.push(resultEntry)
+        if (downloadResult.recorded) {
+          await addSavedFile(savePath, savedFilesDb, task.item)
+        }
+      })
+      .catch((error) => {
+        logError(`Unexpected error processing download result for ${task.item.title}: ${error.message}`)
+        jsonResults.push({ item: formatItem(task.item), recorded: false, error: `Processing error: ${error.message}` })
+        if (progressBar) progressBar.stop()
+      })
+      .finally(() => {
+        activePromises.delete(wrappedPromise)
+      })
+
+    activePromises.add(wrappedPromise)
+  }
+
+  await Promise.allSettled(activePromises)
+
+  multiBar.stop()
 
   return jsonResults
 }
@@ -258,7 +305,7 @@ const discoverFetch = async ({ ip, port }) => {
       client.stop()
     } catch (err) {
       logError(`SSDP discovery failed: ${err.message}`)
-      client.stop()
+      client.stop() // Ensure client is stopped on error
       return null
     }
   }
@@ -310,7 +357,7 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
 
   const showFolders = await findDirectories(apiService, recordingsFolder.id)
   if (showFolders === null) {
-    logError(`Failed to browse the main 'Recordings' folder (ObjectID ${recordingsFolder.id}) after retries. Cannot list shows.`)
+    logError(`Failed to browse the main "Recordings" folder (ObjectID ${recordingsFolder.id}) after retries. Cannot list shows.`)
     return []
   }
 
@@ -332,7 +379,7 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
 
       if (isRecordingFilter) {
         const recordingItems = []
-        log(`Checking recording status for items in "${show.title}"…`)
+        log(`Checking recording status for items in: ${chalk.green(show.title)}`)
         for (const item of items) {
           await new Promise(resolve => setTimeout(resolve, ISRECORDING_CHECK_DELAY))
           if (await isCurrentlyRecording(item)) recordingItems.push(item)
@@ -358,8 +405,8 @@ const getApiService = async (location) => {
   const cds = services.find(s => s.serviceType === CONTENT_DIRECTORY_URN)
   if (!cds) return null
 
-  const controlURL = cds.controlURL
-  const serviceType = cds.serviceType
+  const controlURL = getXmlText(cds.controlURL)
+  const serviceType = getXmlText(cds.serviceType)
 
   if (!controlURL || !serviceType) return null
 
@@ -434,7 +481,7 @@ const browseRequest = async (apiService, objectId = '0') => {
     }
   }
 
-  logError(`Browse request failed definitively for ObjectID ${objectId} after ${BROWSE_RETRIES} attempts.`)
+  logError(`Browse request failed definitively for ObjectID ${objectId} after ${BROWSE_RETRIES} attempts. Last error: ${lastError?.message || 'Unknown'}`)
   return null
 }
 
@@ -464,6 +511,7 @@ const findItems = async (apiService, objectId) => {
 
   return items.map(item => {
     const resNode = item.res
+    const actualRes = Array.isArray(resNode) ? resNode[0] : resNode
     const itemClass = getXmlText(item.class) ?? ''
     const isVideo = itemClass.includes('videoItem')
     const title = getXmlText(item.title)
@@ -474,10 +522,10 @@ const findItems = async (apiService, objectId) => {
       id: getXmlAttr(item, 'id', NO_NUMBER_DEFAULT),
       parent_id: getXmlAttr(item, 'parentID', NO_NUMBER_DEFAULT),
       description: getXmlText(item.description),
-      url: getXmlText(resNode),
-      size: parseInt(getXmlAttr(resNode, 'size', '0'), 10),
-      duration: tsToSeconds(getXmlAttr(resNode, 'duration')),
-      parent_name: getXmlAttr(resNode, 'parentTaskName'),
+      url: getXmlText(actualRes),
+      size: parseInt(getXmlAttr(actualRes, 'size', '0'), 10),
+      duration: tsToSeconds(getXmlAttr(actualRes, 'duration')),
+      parent_name: getXmlAttr(actualRes, 'parentTaskName'),
       item_type: isVideo && /^S\d+ E\d+/i.test(title) ? 'episode' : (isVideo ? 'movie' : 'other')
     }
   })
@@ -537,25 +585,16 @@ const addSavedFile = async (savePath, savedFilesDb, item) => {
   }
 }
 
-const downloadFile = async (item, filePath) => {
+const downloadFile = async (item, filePath, progressBar) => { // Accept progressBar instance
   const lockFilePath = `${filePath}${CONST_LOCK}`
 
   let writer = null
   let responseStream = null
 
-  const progressBar = new cliProgress.SingleBar({
-    format: `Downloading ${item.title} |${chalk.cyan('{bar}')}| {percentage}% || {value}/{total} Bytes || Speed: {speed}`,
-    barCompleteChar: '\u2588',
-    barIncompleteChar: '\u2591',
-    hideCursor: true,
-    etaBuffer: 100,
-    formatValue: (v, options, type) => (type === 'total' || type === 'value') ? cliProgress.Format.bytes(v) : v,
-    formatTotal: (t, options, type) => (type === 'total') ? cliProgress.Format.bytes(t) : t
-  }, cliProgress.Presets.shades_classic)
-
   try {
     if (fsc.existsSync(lockFilePath)) {
       logWarning(`Already writing ${item.title} (lock file exists), skipping.`)
+      if (progressBar) progressBar.stop() // Stop the bar if provided
       return { recorded: false, warning: 'Already writing (lock file exists) skipping' }
     }
 
@@ -575,6 +614,7 @@ const downloadFile = async (item, filePath) => {
       logWarning(`Skipping ${item.title}, it appears to be currently recording.`)
       responseStream.destroy()
       await fs.unlink(lockFilePath).catch(delErr => logWarning(`Could not delete lock file on skip ${lockFilePath}: ${delErr.message}`))
+      if (progressBar) progressBar.stop()
       return { recorded: false, warning: "Skipping item, it's currently recording" }
     }
 
@@ -582,23 +622,33 @@ const downloadFile = async (item, filePath) => {
       logWarning(`Skipping ${item.title}, content length is zero.`)
       responseStream.destroy()
       await fs.unlink(lockFilePath).catch(delErr => logWarning(`Could not delete lock file on zero size ${lockFilePath}: ${delErr.message}`))
+      if (progressBar) progressBar.stop()
       return { recorded: false, warning: 'Skipping item, content length is zero' }
     }
 
     writer = fsc.createWriteStream(filePath)
 
-    progressBar.start(totalLength, 0, { speed: 'N/A' })
+    if (progressBar) {
+      progressBar.setTotal(totalLength)
+      progressBar.update(0, { speed: 'N/A' })
+    }
+
     let downloadedLength = 0
     let lastUpdateTime = Date.now()
 
     responseStream.on('data', (chunk) => {
       downloadedLength += chunk.length
-      const now = Date.now()
-      if (now - lastUpdateTime > 250 || downloadedLength === totalLength) {
-        const elapsedSeconds = (now - progressBar.startTime) / 1000
-        const speed = elapsedSeconds > 0 ? downloadedLength / elapsedSeconds : 0
-        progressBar.update(downloadedLength, { speed: `${cliProgress.Format.bytes(speed)}/s` })
-        lastUpdateTime = now
+      if (progressBar) {
+        const now = Date.now()
+        if (now - lastUpdateTime > 250 || downloadedLength === totalLength) {
+          const elapsedSeconds = (now - progressBar.startTime) / 1000
+          const speed = elapsedSeconds > 0 ? downloadedLength / elapsedSeconds : 0
+          progressBar.update(downloadedLength, {
+              speed: `${cliProgress.Format.bytes(speed)}/s`,
+              value: downloadedLength
+          })
+          lastUpdateTime = now
+        }
       }
     })
 
@@ -606,8 +656,7 @@ const downloadFile = async (item, filePath) => {
 
     return new Promise((resolve, reject) => {
       writer.on('finish', async () => {
-        progressBar.stop()
-        log(`Finished writing: ${path.basename(filePath)}`)
+        if (progressBar) progressBar.stop()
         try {
           await fs.unlink(lockFilePath)
           resolve({ recorded: true })
@@ -618,17 +667,17 @@ const downloadFile = async (item, filePath) => {
       })
 
       writer.on('error', (err) => {
-        progressBar.stop()
+        if (progressBar) progressBar.stop()
         logError(`Error writing file ${path.basename(filePath)}: ${err.message}`)
         debugLog(`File Write Error Details (${item.title})`, err)
-        if (responseStream) responseStream.destroy()
+        if (responseStream && !responseStream.destroyed) responseStream.destroy()
         fs.unlink(lockFilePath).catch(delErr => logWarning(`Could not delete lock file ${lockFilePath} on write error: ${delErr.message}`))
         fs.unlink(filePath).catch(delErr => logWarning(`Could not delete partial file ${filePath} on write error: ${delErr.message}`))
-        reject(err)
+        reject(new Error(`Write error: ${err.message}`))
       })
 
       responseStream.on('error', (err) => {
-        progressBar.stop()
+        if (progressBar) progressBar.stop()
         logError(`Error downloading ${item.title}: ${err.message}`)
         debugLog(`Download Stream Error Details (${item.title})`, err)
 
@@ -641,14 +690,14 @@ const downloadFile = async (item, filePath) => {
           logWarning(`Download for ${item.title} may be incomplete (Network/FetchTV issue?). Check file size.`)
           resolve({ recorded: true, warning: 'Final read might be short (FetchTV/Network issue?). File might be okay but check size.' })
         } else {
-          reject(err)
+          reject(new Error(`Download error: ${err.message}`))
         }
       })
     })
 
   } catch (error) {
-    progressBar.stop()
-    if (responseStream) responseStream.destroy()
+    if (progressBar) progressBar.stop()
+    if (responseStream && !responseStream.destroyed) responseStream.destroy()
     if (writer && !writer.closed) writer.close()
     debugLog(`Outer Download Error (${item.title})`, error)
 
@@ -657,51 +706,54 @@ const downloadFile = async (item, filePath) => {
     } catch (cleanupErr) {
       logWarning(`Could not clean up lock file ${lockFilePath} on error: ${cleanupErr.message}`)
     }
-
     try {
       if (fsc.existsSync(filePath)) await fs.unlink(filePath)
     } catch (cleanupErr) {
       logWarning(`Could not clean up partial file ${filePath} on error: ${cleanupErr.message}`)
     }
 
-    logError(`Failed to download ${item.title}: ${error.message}`)
-    return { recorded: false, error: error.message }
+    logError(`Failed to initiate download for ${item.title}: ${error.message}`)
+    return { recorded: false, error: `Initiation failed: ${error.message}` }
   }
 }
 
 const parseLocations = async (locationsUrls) => {
-  const results = []
-  const xmlParserOptions = { ignoreAttributes: false, attributeNamePrefix: '@_', textNodeName: '#text', parseAttributeValue: true, removeNSPrefix: true }
-  const xmlParser = new XMLParser(xmlParserOptions)
+  const xmlParserOptions = {
+    ignoreAttributes: false,
+    attributeNamePrefix: '@_',
+    textNodeName: '#text',
+    parseAttributeValue: true,
+    removeNSPrefix: true,
+    allowBooleanAttributes: true
+  }
 
-  for (const url of locationsUrls) {
+  const fetchAndParse = async (url) => {
+    const xmlParser = new XMLParser(xmlParserOptions)
     try {
       const response = await axios.get(url, { timeout: REQUEST_TIMEOUT })
       if (XMLValidator.validate(response.data) !== true) {
         logWarning(`Invalid XML from ${url}`)
-        continue
+        return null
       }
       const xmlRoot = xmlParser.parse(response.data)
       debugLog(`Parsed XML from ${url}`, xmlRoot)
-
       const device = xmlRoot?.root?.device
       if (!device) {
         logWarning(`Could not find device info in XML from ${url}`)
-        continue
+        return null
       }
 
-      const loc = {
+      return {
         url: url,
-        deviceType: device.deviceType,
-        friendlyName: device.friendlyName,
-        manufacturer: device.manufacturer,
-        manufacturerURL: device.manufacturerURL,
-        modelDescription: device.modelDescription,
-        modelName: device.modelName,
-        modelNumber: device.modelNumber,
+        deviceType: getXmlText(device.deviceType),
+        friendlyName: getXmlText(device.friendlyName),
+        manufacturer: getXmlText(device.manufacturer),
+        manufacturerURL: getXmlText(device.manufacturerURL),
+        modelDescription: getXmlText(device.modelDescription),
+        modelName: getXmlText(device.modelName),
+        modelNumber: getXmlText(device.modelNumber),
         _rawDeviceXml: device
       }
-      results.push(loc)
     } catch (err) {
       if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
         logWarning(`Timeout reading from ${url}`)
@@ -709,9 +761,13 @@ const parseLocations = async (locationsUrls) => {
         logWarning(`Connection error for ${url}: ${err.message}`)
       }
       debugLog(`Error fetching/parsing ${url}`, err)
+      return null
     }
   }
-  return results
+
+  const promises = locationsUrls.map(url => fetchAndParse(url))
+  const settledResults = await Promise.all(promises)
+  return settledResults.filter(result => result !== null)
 }
 
 const parseXml = (xmlString) => {
@@ -721,23 +777,26 @@ const parseXml = (xmlString) => {
     attributeNamePrefix: '@_',
     textNodeName: '#text',
     parseAttributeValue: true,
-    removeNSPrefix: true
+    removeNSPrefix: true,
+    allowBooleanAttributes: true
   })
   try {
     const isLikelyEmbedded = xmlString.trim().startsWith('<DIDL-Lite')
-    if (isLikelyEmbedded) {
-      if (XMLValidator.validate(xmlString) === true) return xmlParser.parse(xmlString)
-      logWarning('Failed to validate embedded DIDL-Lite XML.')
-      return null
-    } else {
-      if (XMLValidator.validate(xmlString) !== true) {
-        logWarning('Invalid XML received (not DIDL-Lite or Envelope?).')
-        return null
-      }
-      return xmlParser.parse(xmlString)
+    const isValid = XMLValidator.validate(xmlString)
+
+    if (isValid === true) return xmlParser.parse(xmlString)
+
+    if (argv.debug && isValid !== true) {
+      logWarning(`XML validation failed: ${isValid.err.msg}`)
+      debugLog('Invalid XML String', xmlString.slice(0, 500) + '...')
+    } else if (isValid !== true) {
+      logWarning('Invalid XML received.')
     }
+    return null
+
   } catch (error) {
     logError(`XML parsing error: ${error.message}`)
+    debugLog('XML String causing parse error', xmlString.slice(0, 500) + '...')
     return null
   }
 }
@@ -746,28 +805,39 @@ const getXmlAttr = (node, attrName, defaultValue = '') =>
   node?.[`@_${attrName}`] ?? defaultValue
 
 const getXmlText = (node, defaultValue = '') => {
-  if (typeof node === 'object' && node !== null && node.hasOwnProperty('#text')) return node['#text']
-  if (typeof node === 'string') return node
+  if (node === null || node === undefined) return defaultValue
+  if (typeof node === 'object' && node.hasOwnProperty('#text')) return node['#text'] ?? defaultValue
+  if (typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return String(node)
   return defaultValue
 }
 
-const findNode = (obj, path) =>
-  path.split('.').reduce((current, key) => {
-    const foundKey = Object.keys(current || {}).find(k => k.endsWith(key))
-    return current && foundKey ? current[foundKey] : undefined
+const findNode = (obj, path) => {
+  if (!obj || typeof obj !== 'object' || !path) return undefined
+  return path.split('.').reduce((current, key) => {
+    if (current === undefined || current === null) return undefined
+    const foundKey = Object.keys(current).find(k => k === key || k.endsWith(`:${key}`))
+    return foundKey ? current[foundKey] : undefined
   }, obj)
+}
 
 const createValidFilename = (filename = '') => {
   let result = filename.toString().trim()
-  result = result.replace(/[<>:"/\\|?*]/g, '')
-  result = result.replace(/[\t ]+/g, '_')
-  return result.slice(0, MAX_FILENAME)
+  result = result.replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
+  result = result.replace(/\s+/g, '_')
+  result = result.replace(/\.(?![^.]*$)/g, '_')
+  if (result === '.' || result === '..') result = '_'
+  return result.slice(0, MAX_FILENAME - 5)
 }
 
 const tsToSeconds = (ts = '0') => {
+  if (typeof ts !== 'string') return 0
   try {
-    return ts.split(':').reverse().reduce((acc, unit, i) => acc + parseFloat(unit) * (60 ** i), 0)
+    return ts.split(':').reverse().reduce((acc, unit, i) => {
+      const value = parseFloat(unit)
+      return isNaN(value) ? acc : acc + value * (60 ** i)
+    }, 0)
   } catch (e) {
+    debugLog('Error parsing timestamp', { timestamp: ts, error: e })
     return 0
   }
 }
@@ -775,7 +845,7 @@ const tsToSeconds = (ts = '0') => {
 const log = (message) => console.log(message)
 const logWarning = (message) => console.log(chalk.yellow.bold(message))
 const logError = (message) => console.log(chalk.red.bold(message))
-const logHeading = (title) => console.log(chalk.blueBright.bold(title))
+const logHeading = (title) => console.log(chalk.blueBright.bold(`=== ${title} ===`))
 
 const debugLog = (label, data) => {
   if (!argv.debug) return
@@ -796,12 +866,16 @@ const formatItem = (item) => ({
 main().catch(error => {
   logError('\n--- An unexpected error occurred ---')
   logError(error.message)
-  if (argv.debug || !error.response) {
+  if (argv.debug || !(error.response || error.request)) {
     console.error(error.stack)
   } else if (error.response) {
     logError(`Status: ${error.response.status} ${error.response.statusText}`)
-    logError(`URL: ${error.config.url}`)
+    logError(`URL: ${error.config?.url || 'N/A'}`)
     if (error.response.data) logError(`Response Data: ${typeof error.response.data === 'string' ? error.response.data.slice(0, 200) + '...' : '[Object/Stream]'}`)
+  } else if (error.request) {
+    logError('Request made but no response received.')
+    logError(`URL: ${error.config?.url || 'N/A'}`)
+    if (error.code) logError(`Error Code: ${error.code}`)
   }
   logError('----------------------------------')
   process.exit(1)
