@@ -5,7 +5,7 @@
 
 A Node.js CLI tool to download Fetch TV recordings via UPnP.
 
-Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Python), itself based on [`jinxo13/FetchTV-Helpers`](https://github.com/jinxo13/FetchTV-Helpers) (also Python).
+Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Python) which is based on [`jinxo13/FetchTV-Helpers`](https://github.com/jinxo13/FetchTV-Helpers) (also Python).
 
 ## Contents
 

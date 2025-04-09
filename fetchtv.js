@@ -139,7 +139,6 @@ const main = async () => {
 const printInfo = (fetchServer) => {
   const table = new Table({ head: [chalk.cyan('Field'), chalk.cyan('Value')] })
   table.push(
-    { 'URL': fetchServer.url || 'N/A' },
     { 'Type': fetchServer.deviceType || 'N/A' },
     { 'Name': fetchServer.friendlyName || 'N/A' },
     { 'Manufacturer': fetchServer.manufacturer || 'N/A' },
