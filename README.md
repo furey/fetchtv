@@ -24,9 +24,9 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 
 - Discover Fetch TV boxes on your network
 - View basic information about your Fetch TV box
-- List recorded shows and individual recordings
+- List recorded shows and episodes
+- Filter recordings by show and episode title
 - Download recordings to a specified directory
-- Filter recordings by show title, episode title, or exclude specific shows
 - Output information in human-readable format or JSON
 
 ## Installation

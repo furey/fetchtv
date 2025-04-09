@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 
 import fsc from 'fs'
+import _ from 'lodash'
 import path from 'path'
 import axios from 'axios'
 import { URL } from 'url'
 import yargs from 'yargs'
 import chalk from 'chalk'
 import fs from 'fs/promises'
+import debugLib from 'debug'
 import Table from 'cli-table3'
+import prettyMs from 'pretty-ms'
+import { filesize } from 'filesize'
 import cliProgress from 'cli-progress'
 import { hideBin } from 'yargs/helpers'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
-import { filesize } from 'filesize'
-import prettyMs from 'pretty-ms'
-import debugLib from 'debug'
-import _ from 'lodash'
 
 import NodeSsdp from 'node-ssdp'
 const { Client: SsdpClient } = NodeSsdp
@@ -691,8 +691,13 @@ const downloadFile = async (item, filePath, progressBar) => {
         const isNearlyComplete = completionPercentage > 98
 
         if (progressBar) {
+          if (isFullyComplete) progressBar.update(totalLength)
+
           progressBar.stop()
+
           setTimeout(() => {
+            process.stdout.write('\r\x1b[K')
+
             if (isFullyComplete) {
               log(`${item.title} download completed successfully (100%)`)
             } else if (isNearlyComplete) {
@@ -732,7 +737,7 @@ const downloadFile = async (item, filePath, progressBar) => {
                 reject(new Error(`Download error: ${err.message}`))
               }
             }, 300)
-          }, 50)
+          }, 100)
         } else {
           debug('Download Stream Error Details (%s): %O', item.title, err)
           if (writer && !writer.closed) writer.close()
@@ -770,15 +775,15 @@ const downloadFile = async (item, filePath, progressBar) => {
     debug('Outer Download Error (%s): %O', item.title, error)
 
     try {
-    if (fsc.existsSync(lockFilePath)) {
-      try { fsc.unlinkSync(lockFilePath) } catch (e) {}
+      if (fsc.existsSync(lockFilePath)) {
+        try { fsc.unlinkSync(lockFilePath) } catch (e) {}
+      }
+      if (fsc.existsSync(filePath)) {
+        try { fsc.unlinkSync(filePath) } catch (e) {}
+      }
+    } catch (cleanupErr) {
+      logWarning(`Could not clean up files on error: ${cleanupErr.message}`)
     }
-    if (fsc.existsSync(filePath)) {
-      try { fsc.unlinkSync(filePath) } catch (e) {}
-    }
-  } catch (cleanupErr) {
-    logWarning(`Could not clean up files on error: ${cleanupErr.message}`)
-  }
 
     logError(`Failed to initiate download for ${item.title}: ${error.message}`)
     return { recorded: false, error: `Initiation failed: ${error.message}` }
@@ -840,6 +845,7 @@ const parseLocations = async (locationsUrls) => {
 
 const parseXml = (xmlString) => {
   if (!xmlString || typeof xmlString !== 'string') return null
+
   const xmlParser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
@@ -848,6 +854,7 @@ const parseXml = (xmlString) => {
     removeNSPrefix: true,
     allowBooleanAttributes: true
   })
+
   try {
     const isValid = XMLValidator.validate(xmlString)
 
@@ -860,7 +867,6 @@ const parseXml = (xmlString) => {
       logWarning('Invalid XML received.')
     }
     return null
-
   } catch (error) {
     logError(`XML parsing error: ${error.message}`)
     debugXml('XML String causing parse error: %s', xmlString.slice(0, 500) + '...')
