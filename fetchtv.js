@@ -208,7 +208,6 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
   const jsonResults = []
   const tasks = []
 
-  // Build task list
   for (const show of recordings) {
     if (!show.items || show.items.length === 0) continue
 
@@ -239,7 +238,6 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
     format: ' {bar} | {percentage}% | {filename}'
   }, cliProgress.Presets.shades_classic)
 
-  // Handle downloads with concurrency limit
   const activePromises = new Set()
 
   for (const task of tasks) {
@@ -665,9 +663,7 @@ const downloadFile = async (item, filePath, progressBar) => {
       writer.on('finish', async () => {
         if (progressBar) progressBar.stop()
         try {
-          // Add a small delay before removing the lock file
           await new Promise(resolve => setTimeout(resolve, 100))
-          // Check if lock file still exists before trying to remove it
           if (fsc.existsSync(lockFilePath)) {
             await fs.unlink(lockFilePath)
           }
@@ -690,25 +686,63 @@ const downloadFile = async (item, filePath, progressBar) => {
       })
 
       responseStream.on('error', (err) => {
-        if (progressBar) progressBar.stop()
-
-        // Calculate completion percentage
         const completionPercentage = totalLength > 0 ? (downloadedLength / totalLength) * 100 : 0
+        const isFullyComplete = completionPercentage >= 99.9
         const isNearlyComplete = completionPercentage > 98
 
-        if (isNearlyComplete) {
-          logWarning(`Download for ${item.title} interrupted at ${completionPercentage.toFixed(1)}% - File should be usable`)
+        if (progressBar) {
+          progressBar.stop()
+          setTimeout(() => {
+            if (isFullyComplete) {
+              log(`${item.title} download completed successfully (100%)`)
+            } else if (isNearlyComplete) {
+              logWarning(`Download for ${item.title} interrupted at ${completionPercentage.toFixed(1)}% - File should be usable`)
+            } else {
+              logError(`Error downloading ${item.title}: ${err.message}`)
+            }
+
+            debug('Download Stream Error Details (%s): %O', item.title, err)
+
+            setTimeout(() => {
+              if (writer && !writer.closed) writer.close()
+
+              if (!isNearlyComplete) {
+                try {
+                  if (fsc.existsSync(filePath)) fsc.unlinkSync(filePath)
+                } catch (cleanupErr) {
+                  logWarning(`Partial file cleanup failed: ${cleanupErr.message}`)
+                }
+              }
+
+              try {
+                if (fsc.existsSync(lockFilePath)) fsc.unlinkSync(lockFilePath)
+              } catch (cleanupErr) {
+                logWarning(`Lock file cleanup failed: ${cleanupErr.message}`)
+              }
+
+              if (isFullyComplete) {
+                resolve({ recorded: true })
+              } else if (isNearlyComplete || err.message.includes('Premature close') ||
+                  err.message.includes('IncompleteRead') || err.code === 'ECONNRESET') {
+                const warning = isNearlyComplete ?
+                  `Download interrupted at ${completionPercentage.toFixed(1)}% - file should be usable` :
+                  'Download may be incomplete (Network/FetchTV issue). Check file size.'
+                resolve({ recorded: true, warning })
+              } else {
+                reject(new Error(`Download error: ${err.message}`))
+              }
+            }, 300)
+          }, 50)
         } else {
-          logError(`Error downloading ${item.title}: ${err.message}`)
-        }
-
-        debug('Download Stream Error Details (%s): %O', item.title, err)
-
-        // Gracefully close the writer after a delay
-        setTimeout(() => {
+          debug('Download Stream Error Details (%s): %O', item.title, err)
           if (writer && !writer.closed) writer.close()
 
-          // Don't delete the file if it's nearly complete
+          try {
+            if (fsc.existsSync(lockFilePath)) fsc.unlinkSync(lockFilePath)
+          } catch (cleanupErr) {
+            logWarning(`Lock file cleanup failed: ${cleanupErr.message}`)
+          }
+
           if (!isNearlyComplete) {
             try {
               if (fsc.existsSync(filePath)) fsc.unlinkSync(filePath)
@@ -717,23 +751,15 @@ const downloadFile = async (item, filePath, progressBar) => {
             }
           }
 
-          try {
-            if (fsc.existsSync(lockFilePath)) fsc.unlinkSync(lockFilePath)
-          } catch (cleanupErr) {
-            logWarning(`Lock file cleanup failed: ${cleanupErr.message}`)
-          }
-
-          // Always treat nearly complete downloads as successful
-          if (isNearlyComplete || err.message.includes('Premature close') ||
+          if (isFullyComplete) {
+            resolve({ recorded: true })
+          } else if (isNearlyComplete || err.message.includes('Premature close') ||
               err.message.includes('IncompleteRead') || err.code === 'ECONNRESET') {
-            const warning = isNearlyComplete ?
-              'Download nearly complete when interrupted - file should be usable' :
-              'Download may be incomplete (Network/FetchTV issue). Check file size.'
-            resolve({ recorded: true, warning })
+            resolve({ recorded: true, warning: 'Download may be incomplete but should be usable' })
           } else {
             reject(new Error(`Download error: ${err.message}`))
           }
-        }, 500) // Add 500ms delay before cleanup
+        }
       })
     })
 
@@ -745,7 +771,6 @@ const downloadFile = async (item, filePath, progressBar) => {
 
     try {
     if (fsc.existsSync(lockFilePath)) {
-      // Use sync version to ensure cleanup happens
       try { fsc.unlinkSync(lockFilePath) } catch (e) {}
     }
     if (fsc.existsSync(filePath)) {
