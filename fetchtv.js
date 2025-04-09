@@ -23,6 +23,7 @@ const REQUEST_TIMEOUT = 15000
 const BROWSE_RETRIES = 3
 const BROWSE_RETRY_DELAY = 1500
 const BROWSE_INTER_DELAY = 150
+const ISRECORDING_CHECK_DELAY = 200
 const SAVE_FILE_NAME = 'fetchtv.json'
 const FETCHTV_PORT = 49152
 const CONST_LOCK = '.lock'
@@ -332,7 +333,10 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
       if (isRecordingFilter) {
         const recordingItems = []
         log(`Checking recording status for items in "${show.title}"…`)
-        for (const item of items) if (await isCurrentlyRecording(item)) recordingItems.push(item)
+        for (const item of items) {
+          await new Promise(resolve => setTimeout(resolve, ISRECORDING_CHECK_DELAY))
+          if (await isCurrentlyRecording(item)) recordingItems.push(item)
+        }
         items = recordingItems
         if (items.length === 0 && !showsOnly) continue
       }
