@@ -25,19 +25,19 @@ const debugNetwork = debugLib('fetchtv:network')
 
 let argv = {}
 
-const DISCOVERY_TIMEOUT = 3000
-const REQUEST_TIMEOUT = 15000
 const BROWSE_RETRIES = 3
-const BROWSE_RETRY_DELAY = 1500
-const BROWSE_INTER_DELAY = 150
-const ISRECORDING_CHECK_DELAY = 200
-const SAVE_FILE_NAME = 'fetchtv.json'
-const MAX_CONCURRENT_DOWNLOADS = 3
+const MAX_FILENAME = 255
 const FETCHTV_PORT = 49152
 const CONST_LOCK = '.lock'
-const MAX_FILENAME = 255
-const MAX_OCTET_RECORDING = 4398046510080
 const NO_NUMBER_DEFAULT = ''
+const REQUEST_TIMEOUT = 15000
+const DISCOVERY_TIMEOUT = 3000
+const BROWSE_INTER_DELAY = 150
+const BROWSE_RETRY_DELAY = 1500
+const MAX_CONCURRENT_DOWNLOADS = 3
+const ISRECORDING_CHECK_DELAY = 200
+const SAVE_FILE_NAME = 'fetchtv.json'
+const MAX_OCTET_RECORDING = 4398046510080
 const FETCH_MANUFACTURER_URL = 'http://www.fetch.com/'
 const UPNP_CONTENT_DIRECTORY_URN = 'urn:schemas-upnp-org:service:ContentDirectory:1'
 
@@ -46,12 +46,12 @@ const main = async () => {
     .option('info', { type: 'boolean', description: 'Attempts auto-discovery and returns the Fetch TV details' })
     .option('ip', { type: 'string', description: 'Specify the IP Address of the Fetch TV' })
     .option('port', { type: 'number', default: FETCHTV_PORT, description: 'Specify the port of the Fetch TV' })
-    .option('recordings', { type: 'boolean', description: 'List recordings' })
+    .option('recordings', { type: 'boolean', description: 'List episode recordings' })
     .option('shows', { type: 'boolean', description: 'List show titles (and not the episodes within)' })
-    .option('folder', { type: 'array', default: [], description: 'Only include recordings where the show title contains the specified text (repeatable)' })
-    .option('title', { type: 'array', default: [], description: 'Only include recordings where the episode title contains the specified text (repeatable)' })
-    .option('exclude', { type: 'array', default: [], description: "Don't include show titles containing the specified text (repeatable)" })
-    .option('isrecording', { type: 'boolean', description: 'List only items that are currently recording' })
+    .option('show', { type: 'array', default: [], description: 'Filter recordings to show titles containing the specified text (repeatable)' })
+    .option('exclude', { type: 'array', default: [], description: 'Filter recordings to show titles NOT containing the specified text (repeatable)' })
+    .option('title', { type: 'array', default: [], description: 'Filter recordings to episode titles containing the specified text (repeatable)' })
+    .option('is-recording', { type: 'boolean', description: 'List only items that are currently recording' })
     .option('save', { type: 'string', description: 'Save recordings to the specified path' })
     .option('overwrite', { type: 'boolean', default: false, description: 'Will save and overwrite any existing files' })
     .option('json', { type: 'boolean', default: false, description: 'Output show/recording/save results in JSON' })
@@ -61,13 +61,13 @@ const main = async () => {
     .alias('i', 'info')
     .alias('r', 'recordings')
     .alias('s', 'shows')
-    .alias('f', 'folder')
+    .alias('f', 'show')
     .alias('t', 'title')
     .alias('e', 'exclude')
     .alias('o', 'overwrite')
     .alias('j', 'json')
     .alias('d', 'debug')
-    .epilog('Note: Comma-separated values for filters (--folder, --exclude, --title) are NOT supported. Use multiple options instead.')
+    .epilog('Note: Comma-separated values for filters (--show, --exclude, --title) are NOT supported. Use multiple options instead.')
     .wrap(process.stdout.columns ? Math.min(process.stdout.columns, 100) : 100)
     .argv
 
@@ -87,15 +87,15 @@ const main = async () => {
 
   if (argv.info) printInfo(fetchServer)
 
-  const wantsRecordingsAction = argv.recordings || argv.shows || argv.isrecording || argv.save
+  const wantsRecordingsAction = argv.recordings || argv.shows || argv.isRecording || argv.save
 
   if (wantsRecordingsAction) {
     const filters = {
-      folderFilter: processFilter(argv.folder),
+      folderFilter: processFilter(argv.show),
       excludeFilter: processFilter(argv.exclude),
       titleFilter: processFilter(argv.title),
       showsOnly: argv.shows,
-      isRecordingFilter: argv.isrecording
+      isRecordingFilter: argv.isRecording
     }
 
     log(`Getting Fetch TV ${argv.shows ? 'shows' : 'recordings'}…`)
@@ -111,7 +111,7 @@ const main = async () => {
       })
     }
   } else if (!argv.info) {
-    logWarning('No action specified. Use --info, --recordings, --shows, --isrecording, or --save. Use --help for options.')
+    logWarning('No action specified. Use --info, --recordings, --shows, --is-recording, or --save. Use --help for options.')
   }
 
   logHeading(`Done: ${new Date().toLocaleString()}`)
@@ -126,14 +126,15 @@ const processFilter = (arr) => _(arr)
 
 const printInfo = (fetchServer) => {
   const table = new Table({ head: [chalk.cyan('Field'), chalk.cyan('Value')] })
-  const fields = ['deviceType', 'friendlyName', 'manufacturer', 'manufacturerURL',
-                  'modelName', 'modelDescription', 'modelNumber']
-
-  fields.forEach(field => {
-    const displayName = field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())
-    table.push({ [displayName]: fetchServer[field] || 'N/A' })
-  })
-
+  table.push(
+    { 'Type': fetchServer.deviceType || 'N/A' },
+    { 'Name': fetchServer.friendlyName || 'N/A' },
+    { 'Manufacturer': fetchServer.manufacturer || 'N/A' },
+    { 'Manufacturer URL': fetchServer.manufacturerURL || 'N/A' },
+    { 'Model': fetchServer.modelName || 'N/A' },
+    { 'Model Desc': fetchServer.modelDescription || 'N/A' },
+    { 'Model No': fetchServer.modelNumber || 'N/A' }
+  )
   log(table.toString())
 }
 
@@ -142,23 +143,18 @@ const printRecordings = (recordings, { jsonOutput }) => {
 
   if (jsonOutput) {
     const output = sortedRecordings.map(rec => {
-      const item = {
-        id: rec.id,
-        title: rec.title
-      }
+      const item = { id: rec.id, title: rec.title }
       if (!argv.shows) item.items = rec.items?.map(formatItem)
       return item
     })
-    console.log(JSON.stringify(output, null, 2))
-    return
+
+    return console.log(JSON.stringify(output, null, 2))
   }
 
   const context = argv.shows ? 'Shows' : 'Recordings'
   logHeading(`Listing ${context}`)
-  if (!sortedRecordings || sortedRecordings.length === 0) {
-    logWarning(`No ${context} found matching criteria!`)
-    return
-  }
+
+  if (!sortedRecordings || sortedRecordings.length === 0) return logWarning(`No ${context} found matching criteria!`)
 
   sortedRecordings.forEach(recording => {
     const bullet = argv.shows ? '' : '📁 '
@@ -167,7 +163,7 @@ const printRecordings = (recordings, { jsonOutput }) => {
       recording.items.forEach(item => {
         const durationStr = new Date(item.duration * 1000).toISOString().substr(11, 8)
         const sizeFormatted = filesize(item.size)
-        log(`  ${chalk.whiteBright(item.title)} (${chalk.gray(`${durationStr}, ${sizeFormatted}`)})`)
+        log(`  ${chalk.whiteBright(item.title)} ${chalk.gray(`${durationStr} ${sizeFormatted}`)}`)
       })
     } else {
       if (!argv.shows) log(chalk.gray('  (No items listed based on current filters)'))
@@ -241,9 +237,7 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
   const activePromises = new Set()
 
   for (const task of tasks) {
-    while (activePromises.size >= MAX_CONCURRENT_DOWNLOADS) {
-      await Promise.race(activePromises)
-    }
+    while (activePromises.size >= MAX_CONCURRENT_DOWNLOADS) await Promise.race(activePromises)
 
     const progressBar = multiBar.create(task.item.size || 0, 0, {
       filename: path.basename(task.filePath).slice(0, 25).padEnd(25),
@@ -260,11 +254,8 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
         const resultEntry = { item: formatItem(task.item), recorded: downloadResult.recorded }
         if (downloadResult.warning) resultEntry.warning = downloadResult.warning
         if (downloadResult.error) resultEntry.error = downloadResult.error
-
         jsonResults.push(resultEntry)
-        if (downloadResult.recorded) {
-          await addSavedFile(savePath, savedFilesDb, task.item)
-        }
+        if (downloadResult.recorded) await addSavedFile(savePath, savedFilesDb, task.item)
       })
       .catch((error) => {
         logError(`Unexpected error processing download result for ${task.item.title}: ${error.message}`)
@@ -279,6 +270,7 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
   }
 
   await Promise.allSettled(activePromises)
+
   multiBar.stop()
 
   return jsonResults
@@ -372,8 +364,7 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
       await new Promise(resolve => setTimeout(resolve, BROWSE_INTER_DELAY))
       items = await findItems(apiService, show.id)
 
-      if (titleFilter.length > 0)
-        items = items.filter(item => titleFilter.some(t => item.title.toLowerCase().includes(t)))
+      if (titleFilter.length > 0) items = items.filter(item => titleFilter.some(t => item.title.toLowerCase().includes(t)))
 
       if (isRecordingFilter) {
         const recordingItems = []
@@ -387,8 +378,7 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
       }
     }
 
-    if (showsOnly || (items && items.length > 0))
-      results.push({ ...show, items: items })
+    if (showsOnly || (items && items.length > 0)) results.push({ ...show, items: items })
   }
 
   return results
@@ -664,9 +654,7 @@ const downloadFile = async (item, filePath, progressBar) => {
         if (progressBar) progressBar.stop()
         try {
           await new Promise(resolve => setTimeout(resolve, 100))
-          if (fsc.existsSync(lockFilePath)) {
-            await fs.unlink(lockFilePath)
-          }
+          if (fsc.existsSync(lockFilePath)) await fs.unlink(lockFilePath)
           resolve({ recorded: true })
         } catch (unlinkErr) {
           const errMessage = `Could not remove lock file after successful download: ${unlinkErr.message}`
@@ -727,11 +715,15 @@ const downloadFile = async (item, filePath, progressBar) => {
 
               if (isFullyComplete) {
                 resolve({ recorded: true })
-              } else if (isNearlyComplete || err.message.includes('Premature close') ||
-                  err.message.includes('IncompleteRead') || err.code === 'ECONNRESET') {
-                const warning = isNearlyComplete ?
-                  `Download interrupted at ${completionPercentage.toFixed(1)}% - file should be usable` :
-                  'Download may be incomplete (Network/FetchTV issue). Check file size.'
+              } else if (
+                isNearlyComplete ||
+                err.message.includes('Premature close') ||
+                err.message.includes('IncompleteRead') ||
+                err.code === 'ECONNRESET'
+              ) {
+                const warning = isNearlyComplete
+                  ? `Download interrupted at ${completionPercentage.toFixed(1)}% - file should be usable`
+                  : 'Download may be incomplete (Network/FetchTV issue). Check file size.'
                 resolve({ recorded: true, warning })
               } else {
                 reject(new Error(`Download error: ${err.message}`))
@@ -758,8 +750,12 @@ const downloadFile = async (item, filePath, progressBar) => {
 
           if (isFullyComplete) {
             resolve({ recorded: true })
-          } else if (isNearlyComplete || err.message.includes('Premature close') ||
-              err.message.includes('IncompleteRead') || err.code === 'ECONNRESET') {
+          } else if (
+            isNearlyComplete ||
+            err.message.includes('Premature close') ||
+            err.message.includes('IncompleteRead') ||
+            err.code === 'ECONNRESET'
+          ) {
             resolve({ recorded: true, warning: 'Download may be incomplete but should be usable' })
           } else {
             reject(new Error(`Download error: ${err.message}`))
@@ -775,12 +771,8 @@ const downloadFile = async (item, filePath, progressBar) => {
     debug('Outer Download Error (%s): %O', item.title, error)
 
     try {
-      if (fsc.existsSync(lockFilePath)) {
-        try { fsc.unlinkSync(lockFilePath) } catch (e) {}
-      }
-      if (fsc.existsSync(filePath)) {
-        try { fsc.unlinkSync(filePath) } catch (e) {}
-      }
+      if (fsc.existsSync(lockFilePath)) try { fsc.unlinkSync(lockFilePath) } catch (e) {}
+      if (fsc.existsSync(filePath)) try { fsc.unlinkSync(filePath) } catch (e) {}
     } catch (cleanupErr) {
       logWarning(`Could not clean up files on error: ${cleanupErr.message}`)
     }

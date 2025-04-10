@@ -164,7 +164,7 @@ Save all new recordings to `./downloads` (creates directory if needed):
 fetchtv --ip 192.168.86.71 --recordings --save=./downloads
 ```
 
-Save all new recordings but exclude shows with `News` in the title:
+Save all new recordings but exclude show titles containing `News`:
 
 ```command
 fetchtv --ip 192.168.86.71 --recordings --exclude=News --save=./downloads
@@ -173,45 +173,45 @@ fetchtv --ip 192.168.86.71 --recordings --exclude=News --save=./downloads
 Save only new episodes for the show `MasterChef`:
 
 ```command
-fetchtv --ip 192.168.86.71 --recordings --folder=MasterChef --save=./downloads
+fetchtv --ip 192.168.86.71 --recordings --show=MasterChef --save=./downloads
 ```
 
 Force download & overwrite specific `MasterChef` episodes containing `S04E12` or `S04E13`:
 
 ```command
-fetchtv --ip 192.168.86.71 --recordings --folder=MasterChef --title=S04E12 --title=S04E13 --save=./downloads --overwrite
+fetchtv --ip 192.168.86.71 --recordings --show=MasterChef --title=S04E12 --title=S04E13 --save=./downloads --overwrite
 ```
 
 List only items currently being recorded:
 
 ```command
-fetchtv --ip 192.168.86.71 --isrecording
+fetchtv --ip 192.168.86.71 --is-recording
 ```
 
 Save only items currently being recorded:
 
 ```command
-fetchtv --ip 192.168.86.71 --isrecording --save=./in-progress
+fetchtv --ip 192.168.86.71 --is-recording --save=./in-progress
 ```
 
 ## Command Line Options
 
-| Option          | Alias | Type      | Description                                                                              |
-| --------------- | ----- | --------- | ---------------------------------------------------------------------------------------- |
-| `--info`        | `-i`  | `boolean` | Attempts auto-discovery and returns the Fetch TV Server details                          |
-| `--ip`          |       | `string`  | Specify the IP Address of the Fetch TV Server                                            |
-| `--port`        |       | `number`  | Specify the port of the Fetch TV Server (defaults to `49152`)                            |
-| `--recordings`  | `-r`  | `boolean` | List recordings                                                                          |
-| `--shows`       | `-s`  | `boolean` | List show titles and not the episodes within                                             |
-| `--folder`      | `-f`  | `array`   | Only include recordings where the show title contains the specified text (repeatable)    |
-| `--title`       | `-t`  | `array`   | Only include recordings where the episode title contains the specified text (repeatable) |
-| `--exclude`     | `-e`  | `array`   | Don't include show titles containing the specified text (repeatable)                     |
-| `--isrecording` |       | `boolean` | List only items that are currently recording                                             |
-| `--save`        |       | `string`  | Save recordings to the specified path (creates directory if it doesn't exist)            |
-| `--overwrite`   | `-o`  | `boolean` | Will save and overwrite any existing files                                               |
-| `--json`        | `-j`  | `boolean` | Output show/recording/save results in JSON                                               |
-| `--debug`       | `-d`  | `boolean` | Enable detailed debug logging of API responses                                           |
-| `--help`        | `-h`  | `boolean` | Show help message                                                                        |
+| Option           | Alias | Type      | Description                                                                     |
+| ---------------- | ----- | --------- | ------------------------------------------------------------------------------- |
+| `--info`         | `-i`  | `boolean` | Attempts auto-discovery and returns the Fetch TV Server details                 |
+| `--recordings`   | `-r`  | `boolean` | List episode recordings                                                         |
+| `--shows`        | `-s`  | `boolean` | List show titles and not the episodes within                                    |
+| `--ip`           |       | `string`  | Specify the IP Address of the Fetch TV Server                                   |
+| `--port`         |       | `number`  | Specify the port of the Fetch TV Server (defaults to `49152`)                   |
+| `--show`         | `-f`  | `array`   | Filter recordings to show titles containing the specified text (repeatable)     |
+| `--exclude`      | `-e`  | `array`   | Filter recordings to show titles NOT containing the specified text (repeatable) |
+| `--title`        | `-t`  | `array`   | Filter recordings to episode titles containing the specified text (repeatable)  |
+| `--is-recording` |       | `boolean` | List only items that are currently recording                                    |
+| `--save`         |       | `string`  | Save recordings to the specified path (creates directory if it doesn't exist)   |
+| `--overwrite`    | `-o`  | `boolean` | Will save and overwrite any existing files                                      |
+| `--json`         | `-j`  | `boolean` | Output show/recording/save results in JSON                                      |
+| `--debug`        | `-d`  | `boolean` | Enable detailed debug logging of API responses                                  |
+| `--help`         | `-h`  | `boolean` | Show help message                                                               |
 
 ## Notes
 
