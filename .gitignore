@@ -3,3 +3,4 @@ downloads/
 .DS_Store
 fetchtv.json
 repomix*
+!repomix.sh

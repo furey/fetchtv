@@ -43,6 +43,13 @@ const UPNP_CONTENT_DIRECTORY_URN = 'urn:schemas-upnp-org:service:ContentDirector
 
 const main = async () => {
   argv = await yargs(hideBin(process.argv))
+    .middleware((argv) => {
+      const command = argv._[0]
+      if (command) {
+        const commandMatch = ['info', 'recordings', 'shows'].find(cmd => cmd.startsWith(command))
+        if (commandMatch) argv._[0] = commandMatch
+      }
+    })
     .command('info', 'Returns Fetch TV server details')
     .command('recordings', 'List episode recordings')
     .command('shows', 'List show titles and not the episodes within')
@@ -98,7 +105,7 @@ const main = async () => {
       isRecordingFilter: argv.isRecording
     }
 
-    log(`Getting Fetch TV ${hasShowsCommand ? 'shows' : 'recordings'}…`)
+    log(`Retrieving Fetch TV ${hasShowsCommand ? 'shows' : 'recordings'}…`)
     const recordings = await getFetchRecordings(fetchServer, filters)
 
     if (!argv.save) {
@@ -183,7 +190,7 @@ const handleSaveAction = async (recordings, { savePath, overwrite, jsonOutput })
       }
     } catch (statError) {
       if (statError.code === 'ENOENT') {
-        log(`Save path "${savePath}" does not exist, creating it.`)
+        log(chalk.gray(`Save path "${savePath}" does not exist. Creating it now…`))
         await fs.mkdir(savePath, { recursive: true })
       } else {
         throw statError
@@ -226,7 +233,7 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
     return jsonResults
   }
 
-  log(`Preparing to download ${tasks.length} new recordings…`)
+  log(`Saving ${tasks.length} new recording${tasks.length > 1 ? 's' : ''}…`)
 
   const multiBar = new cliProgress.MultiBar({
     clearOnComplete: false,
@@ -258,7 +265,7 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
         if (downloadResult.recorded) await addSavedFile(savePath, savedFilesDb, task.item)
       })
       .catch((error) => {
-        logError(`Unexpected error processing download result for ${task.item.title}: ${error.message}`)
+        logError(`Unexpected error processing save result for ${task.item.title}: ${error.message}`)
         jsonResults.push({ item: formatItem(task.item), recorded: false, error: `Processing error: ${error.message}` })
         if (progressBar) progressBar.stop()
       })
@@ -282,7 +289,7 @@ const discoverFetch = async ({ ip, port }) => {
   if (ip) {
     locations.add(`http://${ip}:${port}/MediaServer.xml`)
   } else {
-    log('Starting discovery…')
+    log('Looking for Fetch TV servers…')
     const client = new SsdpClient()
     client.on('response', (headers, statusCode, rinfo) => {
       if (headers.LOCATION) locations.add(headers.LOCATION)
@@ -316,10 +323,11 @@ const discoverFetch = async ({ ip, port }) => {
   const url = new URL(fetchServer.url)
   const hostname = url.hostname
   if (hostname) {
-    log(`Fetch TV Server IP Address: ${chalk.magentaBright(hostname)}`)
-    if (!ip) log(chalk.gray(`Tip: Run future commands with "--ip=${hostname}" to skip discovery.`))
+    log(`Fetch TV IP address: ${chalk.magentaBright(hostname)}`)
+    if (!ip) log(chalk.gray(`Tip: Run future commands with "--ip=${hostname}" to skip server discovery.`))
   }
-  log(`Device Description Document: ${chalk.magentaBright(fetchServer.url)}`)
+
+  log(`Device Description: ${chalk.magentaBright(fetchServer.url)}`)
 
   return fetchServer
 }
@@ -327,7 +335,7 @@ const discoverFetch = async ({ ip, port }) => {
 const getFetchRecordings = async (location, { folderFilter, excludeFilter, titleFilter, showsOnly, isRecordingFilter }) => {
   const apiService = await getApiService(location)
   if (!apiService) {
-    logError('Could not find ContentDirectory service.')
+    logError('Could not find "ContentDirectory" service.')
     return []
   }
 
@@ -593,7 +601,7 @@ const downloadFile = async (item, filePath, progressBar) => {
 
     responseStream = response.data
     const totalLength = parseInt(response.headers['content-length'] ?? '0', 10)
-    debug('Download Headers for %s: %O', item.title, response.headers)
+    debug('Save Headers for %s: %O', item.title, response.headers)
 
     if (totalLength === MAX_OCTET_RECORDING) {
       logWarning(`Skipping ${item.title}, it appears to be currently recording.`)
@@ -658,7 +666,7 @@ const downloadFile = async (item, filePath, progressBar) => {
           if (fsc.existsSync(lockFilePath)) await fs.unlink(lockFilePath)
           resolve({ recorded: true })
         } catch (unlinkErr) {
-          const errMessage = `Could not remove lock file after successful download: ${unlinkErr.message}`
+          const errMessage = `Could not remove lock file after successful save: ${unlinkErr.message}`
           logWarning(errMessage)
           resolve({ recorded: true, warning: errMessage })
         }
@@ -688,14 +696,14 @@ const downloadFile = async (item, filePath, progressBar) => {
             process.stdout.write('\r\x1b[K')
 
             if (isFullyComplete) {
-              log(`${item.title} download completed successfully (100%)`)
+              log(`${item.title} save completed successfully (100%)`)
             } else if (isNearlyComplete) {
-              logWarning(`Download for ${item.title} interrupted at ${completionPercentage.toFixed(1)}% - File should be usable`)
+              logWarning(`Save for ${item.title} interrupted at ${completionPercentage.toFixed(1)}% - File should be usable`)
             } else {
-              logError(`Error downloading ${item.title}: ${err.message}`)
+              logError(`Error saving ${item.title}: ${err.message}`)
             }
 
-            debug('Download Stream Error Details (%s): %O', item.title, err)
+            debug('Save Stream Error Details (%s): %O', item.title, err)
 
             setTimeout(() => {
               if (writer && !writer.closed) writer.close()
@@ -723,16 +731,16 @@ const downloadFile = async (item, filePath, progressBar) => {
                 err.code === 'ECONNRESET'
               ) {
                 const warning = isNearlyComplete
-                  ? `Download interrupted at ${completionPercentage.toFixed(1)}% - file should be usable`
-                  : 'Download may be incomplete (Network/FetchTV issue). Check file size.'
+                  ? `Save interrupted at ${completionPercentage.toFixed(1)}% - file should be usable`
+                  : 'Save may be incomplete (Network/FetchTV issue). Check file size.'
                 resolve({ recorded: true, warning })
               } else {
-                reject(new Error(`Download error: ${err.message}`))
+                reject(new Error(`Save error: ${err.message}`))
               }
             }, 300)
           }, 100)
         } else {
-          debug('Download Stream Error Details (%s): %O', item.title, err)
+          debug('Save Stream Error Details (%s): %O', item.title, err)
           if (writer && !writer.closed) writer.close()
 
           try {
@@ -757,9 +765,9 @@ const downloadFile = async (item, filePath, progressBar) => {
             err.message.includes('IncompleteRead') ||
             err.code === 'ECONNRESET'
           ) {
-            resolve({ recorded: true, warning: 'Download may be incomplete but should be usable' })
+            resolve({ recorded: true, warning: 'Save may be incomplete but should be usable' })
           } else {
-            reject(new Error(`Download error: ${err.message}`))
+            reject(new Error(`Save error: ${err.message}`))
           }
         }
       })
@@ -769,7 +777,7 @@ const downloadFile = async (item, filePath, progressBar) => {
     if (progressBar) progressBar.stop()
     if (responseStream && !responseStream.destroyed) responseStream.destroy()
     if (writer && !writer.closed) writer.close()
-    debug('Outer Download Error (%s): %O', item.title, error)
+    debug('Outer Save Error (%s): %O', item.title, error)
 
     try {
       if (fsc.existsSync(lockFilePath)) try { fsc.unlinkSync(lockFilePath) } catch (e) {}
@@ -778,7 +786,7 @@ const downloadFile = async (item, filePath, progressBar) => {
       logWarning(`Could not clean up files on error: ${cleanupErr.message}`)
     }
 
-    logError(`Failed to initiate download for ${item.title}: ${error.message}`)
+    logError(`Failed to initiate save for ${item.title}: ${error.message}`)
     return { recorded: false, error: `Initiation failed: ${error.message}` }
   }
 }

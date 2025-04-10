@@ -29,7 +29,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - View basic Fetch TV server information
 - List recorded shows and episodes
 - Filter recordings by show and episode title
-- Download recordings to a specified directory
+- Save recordings to a specified directory
 - Output information in human-readable format or JSON
 
 ## Installation
@@ -229,25 +229,25 @@ List recordings and output as JSON:
 fetchtv recordings --ip 192.168.86.71 --json
 ```
 
-Save all new recordings to `./downloads` (creates directory if needed):
+Save new recordings to `./downloads` (creates directory if needed):
 
 ```command
 fetchtv recordings --ip 192.168.86.71 --save=./downloads
 ```
 
-Save all new recordings but exclude show titles containing `News`:
+Save new recordings but exclude show titles containing `News`:
 
 ```command
 fetchtv recordings --ip 192.168.86.71 --exclude=News --save=./downloads
 ```
 
-Save only new episodes for the show `MasterChef`:
+Save new episodes for the show `MasterChef`:
 
 ```command
 fetchtv recordings --ip 192.168.86.71 --show=MasterChef --save=./downloads
 ```
 
-Force download & overwrite specific `MasterChef` episodes containing `S04E12` or `S04E13`:
+Save & overwrite specific `MasterChef` episodes containing `S04E12` or `S04E13`:
 
 ```command
 fetchtv recordings --ip 192.168.86.71 --show=MasterChef --title=S04E12 --title=S04E13 --save=./downloads --overwrite
@@ -270,7 +270,7 @@ fetchtv recordings --ip 192.168.86.71 --is-recording --save=./in-progress
 - The tool relies on your Fetch TV server's UPnP/DLNA service being discoverable on your network.
 - Firewalls on your computer might block SSDP discovery packets.
 - This tool may list recordings marked for deletion on the Fetch box, as the DLNA service doesn't seem to expose this status.
-- Downloads might sometimes report as incomplete due to how Fetch TV handles streaming (files may still be usable—check file sizes if concerned).
+- Saved files might sometimes report as incomplete due to how Fetch TV handles streaming (files may still be usable—check file sizes if concerned).
 - The Fetch TV UPnP service can sometimes be unstable and drop connections. This tool implements retries and delays to mitigate this, but occasional warnings about failed first attempts may appear in the console.
 
 ## Disclaimer
