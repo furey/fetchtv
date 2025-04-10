@@ -2,7 +2,7 @@
   "name": "fetchtv",
   "version": "1.0.0",
   "author": "James Furey (https://about.me/jamesfurey)",
-  "description": "A CLI tool to download Fetch TV recordings via UPnP.",
+  "description": "A Node.js CLI tool to manage Fetch TV recordings.",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "fetchtv.js",
