@@ -20,6 +20,10 @@
     "dlna",
     "cli"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/furey/fetchtv.git"
+  },
   "dependencies": {
     "axios": "^1.7.2",
     "chalk": "^5.3.0",
@@ -35,10 +39,6 @@
   },
   "volta": {
     "node": "22.14.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/furey/fetchtv.git"
   },
   "engines": {
     "node": ">=18.0.0"
