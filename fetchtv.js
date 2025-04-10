@@ -43,9 +43,9 @@ const UPNP_CONTENT_DIRECTORY_URN = 'urn:schemas-upnp-org:service:ContentDirector
 
 const main = async () => {
   argv = await yargs(hideBin(process.argv))
-    .option('info', { type: 'boolean', description: 'Attempts auto-discovery and returns the Fetch TV Server details' })
-    .option('ip', { type: 'string', description: 'Specify the IP Address of the Fetch TV Server' })
-    .option('port', { type: 'number', default: FETCHTV_PORT, description: 'Specify the port of the Fetch TV Server' })
+    .option('info', { type: 'boolean', description: 'Attempts auto-discovery and returns the Fetch TV server details' })
+    .option('ip', { type: 'string', description: 'Specify the IP Address of the Fetch TV server' })
+    .option('port', { type: 'number', default: FETCHTV_PORT, description: 'Specify the port of the Fetch TV server' })
     .option('recordings', { type: 'boolean', description: 'List episode recordings' })
     .option('shows', { type: 'boolean', description: 'List show titles and not the episodes within' })
     .option('show', { type: 'array', default: [], description: 'Filter recordings to show titles containing the specified text (repeatable)' })

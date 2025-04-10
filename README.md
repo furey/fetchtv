@@ -26,8 +26,8 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 
 ## Features
 
-- Discover Fetch TV boxes on your network
-- View basic information about your Fetch TV box
+- Discover Fetch TV servers on your network
+- View basic Fetch TV server information
 - List recorded shows and episodes
 - Filter recordings by show and episode title
 - Download recordings to a specified directory
@@ -37,6 +37,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 
 - [NPX](#installation-npx) (Easiest)
 - [Node.js from Source](#installation-nodejs-from-source)
+- [Docker from Source](#installation-docker-from-source)
 
 ### Installation: NPX
 
@@ -59,6 +60,12 @@ npx -y fetchtv
 
 # Using "@latest" to keep the package up-to-date
 npx -y fetchtv@latest
+
+# With options
+npx -y fetchtv@latest --info
+npx -y fetchtv@latest --recordings
+npx -y fetchtv@latest --shows
+# etc…
 ```
 
 > If you encounter permissions errors with `npx` try running `npx clear-npx-cache` prior to running `npx -y fetchtv` (this clears the cache and re-downloads the package).
@@ -87,6 +94,12 @@ npx -y fetchtv@latest
 1. Run the tool:<br>
     ```console
     node fetchtv.js
+
+    # With options
+    node fetchtv.js --info
+    node fetchtv.js --recordings
+    node fetchtv.js --shows
+    # etc…
     ```
 
 #### Optional: Link `fetchtv` Tool
@@ -104,6 +117,48 @@ To uninstall the linked tool, run:
 
 ```console
 npm unlink
+```
+
+### Installation: Docker from Source
+
+> [!NOTE]<br>
+> Docker from source requires [Docker](https://docs.docker.com/get-started/get-docker) installed and running on your system.
+
+1. Clone the `fetchtv` repository:<br>
+    ```console
+    git clone https://github.com/furey/fetchtv.git
+    ```
+1. Navigate to the cloned repository directory:<br>
+    ```console
+    cd /path/to/fetchtv
+    ```
+1. Ensure Docker is installed:<br>
+    ```console
+    docker --version # Ideally >= v27.x
+    ```
+1. Build the Docker image:<br>
+    ```console
+    docker build -t fetchtv .
+    ```
+1. Run the container:<br>
+    ```console
+    docker run -t --rm fetchtv
+
+    # With options
+    docker run -t --rm fetchtv --info
+    docker run -t --rm fetchtv --recordings
+    docker run -t --rm fetchtv --shows
+    # etc…
+    ```
+
+#### UPnP/SSDP Discovery in Docker
+
+UPnP/SSDP discovery often doesn't work properly in Docker containers due to network isolation.
+
+To work around this, it's recommended to specify your Fetch TV server's IP address directly with the `--ip` (and optionally `--port`) option when running the container. For example:
+
+```console
+docker run -t --rm fetchtv --ip=192.168.86.71
 ```
 
 ## Usage
@@ -131,11 +186,11 @@ fetchtv <OPTIONS>
 
 | Option           | Alias | Type      | Description                                                                     |
 | ---------------- | ----- | --------- | ------------------------------------------------------------------------------- |
-| `--info`         | `-i`  | `boolean` | Attempts auto-discovery and returns the Fetch TV Server details                 |
+| `--info`         | `-i`  | `boolean` | Attempts auto-discovery and returns the Fetch TV server details                 |
 | `--recordings`   | `-r`  | `boolean` | List episode recordings                                                         |
 | `--shows`        | `-s`  | `boolean` | List show titles and not the episodes within                                    |
-| `--ip`           |       | `string`  | Specify the IP Address of the Fetch TV Server                                   |
-| `--port`         |       | `number`  | Specify the port of the Fetch TV Server (default: `49152`)                      |
+| `--ip`           |       | `string`  | Specify the IP Address of the Fetch TV server                                   |
+| `--port`         |       | `number`  | Specify the port of the Fetch TV server (default: `49152`)                      |
 | `--show`         | `-f`  | `array`   | Filter recordings to show titles containing the specified text (repeatable)     |
 | `--exclude`      | `-e`  | `array`   | Filter recordings to show titles NOT containing the specified text (repeatable) |
 | `--title`        | `-t`  | `array`   | Filter recordings to episode titles containing the specified text (repeatable)  |
@@ -149,9 +204,9 @@ fetchtv <OPTIONS>
 ## Examples
 
 > [!NOTE]<br>
-> The following examples assume you have a Fetch TV box on your local network and you've [linked the tool](#optional-link-fetchtv-tool) to your system path.
+> The following examples assume you have a Fetch TV server on your local network and you've [linked the tool](#optional-link-fetchtv-tool) to your system path.
 
-Search for Fetch TV boxes:
+Search for Fetch TV servers:
 
 ```command
 fetchtv
@@ -219,7 +274,7 @@ fetchtv --ip 192.168.86.71 --is-recording --save=./in-progress
 
 ## Notes
 
-- The tool relies on your Fetch TV box's UPnP/DLNA service being discoverable on your network.
+- The tool relies on your Fetch TV server's UPnP/DLNA service being discoverable on your network.
 - Firewalls on your computer might block SSDP discovery packets.
 - This tool may list recordings marked for deletion on the Fetch box, as the DLNA service doesn't seem to expose this status.
 - Downloads might sometimes report as incomplete due to how Fetch TV handles streaming (files may still be usable—check file sizes if concerned).
