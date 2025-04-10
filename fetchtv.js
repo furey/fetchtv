@@ -43,11 +43,11 @@ const UPNP_CONTENT_DIRECTORY_URN = 'urn:schemas-upnp-org:service:ContentDirector
 
 const main = async () => {
   argv = await yargs(hideBin(process.argv))
-    .option('info', { type: 'boolean', description: 'Attempts auto-discovery and returns the Fetch TV server details' })
+    .command('info', 'Returns Fetch TV server details')
+    .command('recordings', 'List episode recordings')
+    .command('shows', 'List show titles and not the episodes within')
     .option('ip', { type: 'string', description: 'Specify the IP Address of the Fetch TV server' })
     .option('port', { type: 'number', default: FETCHTV_PORT, description: 'Specify the port of the Fetch TV server' })
-    .option('recordings', { type: 'boolean', description: 'List episode recordings' })
-    .option('shows', { type: 'boolean', description: 'List show titles and not the episodes within' })
     .option('show', { type: 'array', default: [], description: 'Filter recordings to show titles containing the specified text (repeatable)' })
     .option('exclude', { type: 'array', default: [], description: 'Filter recordings to show titles NOT containing the specified text (repeatable)' })
     .option('title', { type: 'array', default: [], description: 'Filter recordings to episode titles containing the specified text (repeatable)' })
@@ -58,16 +58,13 @@ const main = async () => {
     .option('debug', { type: 'boolean', default: false, description: 'Enable verbose logging for debugging'})
     .help()
     .alias('h', 'help')
-    .alias('i', 'info')
-    .alias('r', 'recordings')
-    .alias('s', 'shows')
-    .alias('f', 'show')
+    .alias('s', 'show')
     .alias('t', 'title')
     .alias('e', 'exclude')
     .alias('o', 'overwrite')
     .alias('j', 'json')
     .alias('d', 'debug')
-    .epilog('Note: Comma-separated values for filters (--show, --exclude, --title) are NOT supported. Use multiple options instead.')
+    .epilog('Note: Comma-separated values for filters (--show, --exclude, --title) are NOT supported. Instead, repeat option as needed.')
     .wrap(process.stdout.columns ? Math.min(process.stdout.columns, 100) : 100)
     .argv
 
@@ -85,24 +82,27 @@ const main = async () => {
     process.exit(1)
   }
 
-  if (argv.info) printInfo(fetchServer)
+  const hasInfoCommand = argv._[0] === 'info'
+  const hasRecordingsCommand = argv._[0] === 'recordings'
+  const hasShowsCommand = argv._[0] === 'shows'
+  const wantsRecordingsAction = hasRecordingsCommand || hasShowsCommand || argv.isRecording || argv.save
 
-  const wantsRecordingsAction = argv.recordings || argv.shows || argv.isRecording || argv.save
+  if (hasInfoCommand) printInfo(fetchServer)
 
   if (wantsRecordingsAction) {
     const filters = {
       folderFilter: processFilter(argv.show),
       excludeFilter: processFilter(argv.exclude),
       titleFilter: processFilter(argv.title),
-      showsOnly: argv.shows,
+      showsOnly: hasShowsCommand,
       isRecordingFilter: argv.isRecording
     }
 
-    log(`Getting Fetch TV ${argv.shows ? 'shows' : 'recordings'}…`)
+    log(`Getting Fetch TV ${hasShowsCommand ? 'shows' : 'recordings'}…`)
     const recordings = await getFetchRecordings(fetchServer, filters)
 
     if (!argv.save) {
-      printRecordings(recordings, { jsonOutput: argv.json })
+      printRecordings(recordings, { jsonOutput: argv.json, showsOnly: hasShowsCommand })
     } else {
       await handleSaveAction(recordings, {
         savePath: path.resolve(argv.save),
@@ -110,8 +110,8 @@ const main = async () => {
         jsonOutput: argv.json
       })
     }
-  } else if (!argv.info) {
-    logWarning('No action specified. Use --info, --recordings, --shows, --is-recording, or --save. Use --help for options.')
+  } else if (!hasInfoCommand) {
+    logWarning('No action specified. Use info, recordings, shows, --is-recording, or --save. Use --help for options.')
   }
 
   logHeading(`Done: ${new Date().toLocaleString()}`)
@@ -138,26 +138,26 @@ const printInfo = (fetchServer) => {
   log(table.toString())
 }
 
-const printRecordings = (recordings, { jsonOutput }) => {
+const printRecordings = (recordings, { jsonOutput, showsOnly }) => {
   const sortedRecordings = sortRecordingsByTitle(recordings)
 
   if (jsonOutput) {
     const output = sortedRecordings.map(rec => {
       const item = { id: rec.id, title: rec.title }
-      if (!argv.shows) item.items = rec.items?.map(formatItem)
+      if (!showsOnly) item.items = rec.items?.map(formatItem)
       return item
     })
 
     return console.log(JSON.stringify(output, null, 2))
   }
 
-  const context = argv.shows ? 'Shows' : 'Recordings'
+  const context = showsOnly ? 'Shows' : 'Recordings'
   logHeading(`Listing ${context}`)
 
   if (!sortedRecordings || sortedRecordings.length === 0) return logWarning(`No ${context} found matching criteria!`)
 
   sortedRecordings.forEach(recording => {
-    const bullet = argv.shows ? '' : '📁 '
+    const bullet = showsOnly ? '' : '📁 '
     log(chalk.green(`${bullet}${recording.title}`))
     if (recording.items && recording.items.length > 0) {
       recording.items.forEach(item => {
@@ -166,7 +166,7 @@ const printRecordings = (recordings, { jsonOutput }) => {
         log(`  ${chalk.whiteBright(item.title)} ${chalk.gray(`${durationStr} ${sizeFormatted}`)}`)
       })
     } else {
-      if (!argv.shows) log(chalk.gray('  (No items listed based on current filters)'))
+      if (!showsOnly) log(chalk.gray('  (No items listed based on current filters)'))
     }
   })
 }
@@ -277,12 +277,12 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
 }
 
 const discoverFetch = async ({ ip, port }) => {
-  log('Starting discovery…')
   const locations = new Set()
 
   if (ip) {
     locations.add(`http://${ip}:${port}/MediaServer.xml`)
   } else {
+    log('Starting discovery…')
     const client = new SsdpClient()
     client.on('response', (headers, statusCode, rinfo) => {
       if (headers.LOCATION) locations.add(headers.LOCATION)
@@ -313,11 +313,12 @@ const discoverFetch = async ({ ip, port }) => {
     return null
   }
 
-  log('Discovery successful!')
-
   const url = new URL(fetchServer.url)
   const hostname = url.hostname
-  if (hostname) log(`Fetch TV IP Address: ${chalk.magentaBright(hostname)}`)
+  if (hostname) {
+    log(`Fetch TV Server IP Address: ${chalk.magentaBright(hostname)}`)
+    if (!ip) log(chalk.gray(`Tip: Run future commands with "--ip=${hostname}" to skip discovery.`))
+  }
   log(`Device Description Document: ${chalk.magentaBright(fetchServer.url)}`)
 
   return fetchServer

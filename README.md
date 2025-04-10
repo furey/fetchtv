@@ -13,7 +13,6 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
-- [Options](#options)
 - [Examples](#examples)
 - [Notes](#notes)
 - [Disclaimer](#disclaimer)
@@ -61,10 +60,10 @@ npx -y fetchtv
 # Using "@latest" to keep the package up-to-date
 npx -y fetchtv@latest
 
-# With options
-npx -y fetchtv@latest --info
-npx -y fetchtv@latest --recordings
-npx -y fetchtv@latest --shows
+# Running the tool with various commands
+npx -y fetchtv@latest info
+npx -y fetchtv@latest recordings
+npx -y fetchtv@latest shows
 # etc…
 ```
 
@@ -94,11 +93,9 @@ npx -y fetchtv@latest --shows
 1. Run the tool:<br>
     ```console
     node fetchtv.js
-
-    # With options
-    node fetchtv.js --info
-    node fetchtv.js --recordings
-    node fetchtv.js --shows
+    node fetchtv.js info
+    node fetchtv.js recordings
+    node fetchtv.js shows
     # etc…
     ```
 
@@ -143,11 +140,9 @@ npm unlink
 1. Run the container:<br>
     ```console
     docker run -t --rm fetchtv
-
-    # With options
-    docker run -t --rm fetchtv --info
-    docker run -t --rm fetchtv --recordings
-    docker run -t --rm fetchtv --shows
+    docker run -t --rm fetchtv info
+    docker run -t --rm fetchtv recordings
+    docker run -t --rm fetchtv shows
     # etc…
     ```
 
@@ -166,32 +161,30 @@ docker run -t --rm fetchtv --ip=192.168.86.71
 If you [installed via NPX](#installation-npx), you can run it from anywhere:
 
 ```command
-npx -y fetchtv <OPTIONS>
+npx -y fetchtv <COMMAND> [OPTIONS]
 ```
 
 If you [installed from Node.js source](#installation-nodejs-from-source), you can run it from the cloned repo directory:
 
 ```command
 cd /path/to/fetchtv
-node fetchtv.js <OPTIONS>
+node fetchtv.js <COMMAND> [OPTIONS]
 ```
 
 If you [linked the tool](#optional-link-fetchtv-tool) after installing from source, you can run it from anywhere:
 
 ```command
-fetchtv <OPTIONS>
+fetchtv <COMMAND> [OPTIONS]
 ```
 
-## Options
-
-| Option           | Alias | Type      | Description                                                                     |
+| Command/Option   | Alias | Type      | Description                                                                     |
 | ---------------- | ----- | --------- | ------------------------------------------------------------------------------- |
-| `--info`         | `-i`  | `boolean` | Attempts auto-discovery and returns the Fetch TV server details                 |
-| `--recordings`   | `-r`  | `boolean` | List episode recordings                                                         |
-| `--shows`        | `-s`  | `boolean` | List show titles and not the episodes within                                    |
+| `info`           |       | `command` | Returns Fetch TV server details                                                 |
+| `recordings`     |       | `command` | List episode recordings                                                         |
+| `shows`          |       | `command` | List show titles and not the episodes within                                    |
 | `--ip`           |       | `string`  | Specify the IP Address of the Fetch TV server                                   |
 | `--port`         |       | `number`  | Specify the port of the Fetch TV server (default: `49152`)                      |
-| `--show`         | `-f`  | `array`   | Filter recordings to show titles containing the specified text (repeatable)     |
+| `--show`         | `-s`  | `array`   | Filter recordings to show titles containing the specified text (repeatable)     |
 | `--exclude`      | `-e`  | `array`   | Filter recordings to show titles NOT containing the specified text (repeatable) |
 | `--title`        | `-t`  | `array`   | Filter recordings to episode titles containing the specified text (repeatable)  |
 | `--is-recording` |       | `boolean` | Filter recordings to only those that are currently recording                    |
@@ -215,61 +208,61 @@ fetchtv
 Display Fetch box details (uses auto-discovery):
 
 ```command
-fetchtv --info
+fetchtv info
 ```
 
 List recorded show titles:
 
 ```command
-fetchtv --ip 192.168.86.71 --shows
+fetchtv shows --ip 192.168.86.71
 ```
 
 List recordings:
 
 ```command
-fetchtv --ip 192.168.86.71 --recordings
+fetchtv recordings --ip 192.168.86.71
 ```
 
 List recordings and output as JSON:
 
 ```command
-fetchtv --ip 192.168.86.71 --recordings --json
+fetchtv recordings --ip 192.168.86.71 --json
 ```
 
 Save all new recordings to `./downloads` (creates directory if needed):
 
 ```command
-fetchtv --ip 192.168.86.71 --recordings --save=./downloads
+fetchtv recordings --ip 192.168.86.71 --save=./downloads
 ```
 
 Save all new recordings but exclude show titles containing `News`:
 
 ```command
-fetchtv --ip 192.168.86.71 --recordings --exclude=News --save=./downloads
+fetchtv recordings --ip 192.168.86.71 --exclude=News --save=./downloads
 ```
 
 Save only new episodes for the show `MasterChef`:
 
 ```command
-fetchtv --ip 192.168.86.71 --recordings --show=MasterChef --save=./downloads
+fetchtv recordings --ip 192.168.86.71 --show=MasterChef --save=./downloads
 ```
 
 Force download & overwrite specific `MasterChef` episodes containing `S04E12` or `S04E13`:
 
 ```command
-fetchtv --ip 192.168.86.71 --recordings --show=MasterChef --title=S04E12 --title=S04E13 --save=./downloads --overwrite
+fetchtv recordings --ip 192.168.86.71 --show=MasterChef --title=S04E12 --title=S04E13 --save=./downloads --overwrite
 ```
 
 List only items currently being recorded:
 
 ```command
-fetchtv --ip 192.168.86.71 --is-recording
+fetchtv recordings --ip 192.168.86.71 --is-recording
 ```
 
 Save only items currently being recorded:
 
 ```command
-fetchtv --ip 192.168.86.71 --is-recording --save=./in-progress
+fetchtv recordings --ip 192.168.86.71 --is-recording --save=./in-progress
 ```
 
 ## Notes
