@@ -13,7 +13,11 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Options](#options)
 - [Examples](#examples)
+- [Notes](#notes)
+- [Disclaimer](#disclaimer)
+- [Support](#support)
 
 ## Quick Start
 
@@ -123,6 +127,25 @@ If you [linked the tool](#optional-link-fetchtv-tool) after installing from sour
 fetchtv <OPTIONS>
 ```
 
+## Options
+
+| Option           | Alias | Type      | Description                                                                     |
+| ---------------- | ----- | --------- | ------------------------------------------------------------------------------- |
+| `--info`         | `-i`  | `boolean` | Attempts auto-discovery and returns the Fetch TV Server details                 |
+| `--recordings`   | `-r`  | `boolean` | List episode recordings                                                         |
+| `--shows`        | `-s`  | `boolean` | List show titles and not the episodes within                                    |
+| `--ip`           |       | `string`  | Specify the IP Address of the Fetch TV Server                                   |
+| `--port`         |       | `number`  | Specify the port of the Fetch TV Server (default: `49152`)                      |
+| `--show`         | `-f`  | `array`   | Filter recordings to show titles containing the specified text (repeatable)     |
+| `--exclude`      | `-e`  | `array`   | Filter recordings to show titles NOT containing the specified text (repeatable) |
+| `--title`        | `-t`  | `array`   | Filter recordings to episode titles containing the specified text (repeatable)  |
+| `--is-recording` |       | `boolean` | Filter recordings to only those that are currently recording                    |
+| `--save`         |       | `string`  | Save recordings to the specified path                                           |
+| `--overwrite`    | `-o`  | `boolean` | Overwrite existing files when saving                                            |
+| `--json`         | `-j`  | `boolean` | Output show/recording/save results in JSON                                      |
+| `--debug`        | `-d`  | `boolean` | Enable verbose logging for debugging                                            |
+| `--help`         | `-h`  | `boolean` | Show help message                                                               |
+
 ## Examples
 
 > [!NOTE]<br>
@@ -193,25 +216,6 @@ Save only items currently being recorded:
 ```command
 fetchtv --ip 192.168.86.71 --is-recording --save=./in-progress
 ```
-
-## Command Line Options
-
-| Option           | Alias | Type      | Description                                                                     |
-| ---------------- | ----- | --------- | ------------------------------------------------------------------------------- |
-| `--info`         | `-i`  | `boolean` | Attempts auto-discovery and returns the Fetch TV Server details                 |
-| `--recordings`   | `-r`  | `boolean` | List episode recordings                                                         |
-| `--shows`        | `-s`  | `boolean` | List show titles and not the episodes within                                    |
-| `--ip`           |       | `string`  | Specify the IP Address of the Fetch TV Server                                   |
-| `--port`         |       | `number`  | Specify the port of the Fetch TV Server (defaults to `49152`)                   |
-| `--show`         | `-f`  | `array`   | Filter recordings to show titles containing the specified text (repeatable)     |
-| `--exclude`      | `-e`  | `array`   | Filter recordings to show titles NOT containing the specified text (repeatable) |
-| `--title`        | `-t`  | `array`   | Filter recordings to episode titles containing the specified text (repeatable)  |
-| `--is-recording` |       | `boolean` | List only items that are currently recording                                    |
-| `--save`         |       | `string`  | Save recordings to the specified path (creates directory if it doesn't exist)   |
-| `--overwrite`    | `-o`  | `boolean` | Will save and overwrite any existing files                                      |
-| `--json`         | `-j`  | `boolean` | Output show/recording/save results in JSON                                      |
-| `--debug`        | `-d`  | `boolean` | Enable detailed debug logging of API responses                                  |
-| `--help`         | `-h`  | `boolean` | Show help message                                                               |
 
 ## Notes
 
