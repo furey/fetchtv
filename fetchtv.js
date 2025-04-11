@@ -478,29 +478,6 @@ const getApiService = async (location) => {
   }
 }
 
-const warmupConnection = async apiService => {
-  try {
-    debug('Warming up connection to Fetch TV server...')
-    // Make a minimal request to warm up the connection
-    await axios.post(
-      apiService.cd_ctr,
-      createBrowsePayload(apiService.cd_service, '0', 1),
-      {
-        headers: {
-          'Content-Type': 'text/xml;charset="utf-8"',
-          'SOAPAction': `"${apiService.cd_service}#Browse"`
-        },
-        timeout: REQUEST_TIMEOUT * 2
-      }
-    )
-    debug('Connection warm-up successful')
-    return true
-  } catch (err) {
-    debug('Connection warm-up failed: %s', err.message)
-    return false
-  }
-}
-
 const createRequestManager = (options = {}) => {
   const state = {
     concurrency: options.initialConcurrency || INITIAL_BROWSE_CONCURRENCY,
