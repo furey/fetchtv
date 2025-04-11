@@ -24,22 +24,34 @@ const debugXml = debugLib('fetchtv:xml')
 const debugNetwork = debugLib('fetchtv:network')
 
 let argv = {}
+let progressBarActive = false
 
 const BROWSE_RETRIES = 3
 const MAX_FILENAME = 255
 const FETCHTV_PORT = 49152
 const CONST_LOCK = '.lock'
+const MIN_BROWSE_DELAY = 50
 const NO_NUMBER_DEFAULT = ''
 const REQUEST_TIMEOUT = 15000
 const DISCOVERY_TIMEOUT = 3000
 const BROWSE_INTER_DELAY = 150
 const BROWSE_RETRY_DELAY = 1500
+const MAX_CONCURRENT_BROWSE = 5
+const ADAPTIVE_DELAY_FACTOR = 1.5
 const MAX_CONCURRENT_DOWNLOADS = 3
 const ISRECORDING_CHECK_DELAY = 200
+const INITIAL_BROWSE_CONCURRENCY = 3
 const SAVE_FILE_NAME = 'fetchtv.json'
 const MAX_OCTET_RECORDING = 4398046510080
 const FETCH_MANUFACTURER_URL = 'http://www.fetch.com/'
 const UPNP_CONTENT_DIRECTORY_URN = 'urn:schemas-upnp-org:service:ContentDirectory:1'
+
+const REQUEST_QUEUE_PRIORITY = {
+  ROOT: 0,
+  SHOWS_FOLDER: 1,
+  SHOW: 2,
+  RECORDING_CHECK: 3
+}
 
 const main = async () => {
   argv = await yargs(hideBin(process.argv))
@@ -155,7 +167,9 @@ const printRecordings = (recordings, { jsonOutput, showsOnly }) => {
       return item
     })
 
-    return console.log(JSON.stringify(output, null, 2))
+    logHeading('Start JSON Output', 'greenBright')
+    console.log(JSON.stringify(output, null, 2))
+    return logHeading('End JSON Output', 'greenBright')
   }
 
   const context = showsOnly ? 'Shows' : 'Recordings'
@@ -198,7 +212,11 @@ const handleSaveAction = async (recordings, { savePath, overwrite, jsonOutput })
     }
 
     const jsonResult = await saveRecordings(recordings, { savePath, overwrite })
-    if (jsonOutput) console.log(JSON.stringify(jsonResult, null, 2))
+    if (jsonOutput) {
+      logHeading('Start JSON Output', 'greenBright')
+      console.log(JSON.stringify(jsonResult, null, 2))
+      return logHeading('End JSON Output', 'greenBright')
+    }
   } catch (saveError) {
     logError(`Error during save process: ${saveError.message}`)
     if (argv.debug) console.error(saveError.stack)
@@ -235,6 +253,7 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
 
   log(`Saving ${tasks.length} new recording${tasks.length > 1 ? 's' : ''}…`)
 
+  progressBarActive = true
   const multiBar = new cliProgress.MultiBar({
     clearOnComplete: false,
     hideCursor: true,
@@ -279,6 +298,7 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
   await Promise.allSettled(activePromises)
 
   multiBar.stop()
+  progressBarActive = false
 
   return jsonResults
 }
@@ -339,58 +359,95 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
     return []
   }
 
-  const baseFolders = await findDirectories(apiService, '0')
+  const requestManager = createRequestManager({
+    debug: argv.debug,
+    initialConcurrency: INITIAL_BROWSE_CONCURRENCY
+  })
+
+  const baseFolders = await requestManager.enqueue(
+    () => findDirectories(apiService, '0'),
+    REQUEST_QUEUE_PRIORITY.ROOT
+  )
+
   if (baseFolders === null) {
-    logError('Failed to browse root folder (ObjectID 0) after retries. Cannot list recordings.')
+    logError('Failed to browse root directory (ObjectID 0) after retries. Cannot list recordings.')
     return []
   }
 
   const recordingsFolder = baseFolders.find(f => f.title === 'Recordings')
   if (!recordingsFolder) {
-    logWarning('No "Recordings" folder found in processed base folders.')
+    logWarning('No "Recordings" directory found in processed base directories.')
     return []
   }
 
-  await new Promise(resolve => setTimeout(resolve, BROWSE_INTER_DELAY))
+  const showFolders = await requestManager.enqueue(
+    () => findDirectories(apiService, recordingsFolder.id),
+    REQUEST_QUEUE_PRIORITY.SHOWS_FOLDER
+  )
 
-  const showFolders = await findDirectories(apiService, recordingsFolder.id)
   if (showFolders === null) {
-    logError(`Failed to browse the main "Recordings" folder (ObjectID ${recordingsFolder.id}) after retries. Cannot list shows.`)
+    logError(`Failed to browse the main "Recordings" directory (ObjectID ${recordingsFolder.id}) after retries. Cannot list shows.`)
     return []
   }
 
-  const results = []
-
-  for (const show of showFolders) {
+  const filteredShows = showFolders.filter(show => {
     const titleLower = show.title.toLowerCase()
     const include = !folderFilter.length || folderFilter.some(f => titleLower.includes(f))
     const exclude = excludeFilter.length && excludeFilter.some(e => titleLower.includes(e))
+    return include && !exclude
+  })
 
-    if (!include || exclude) continue
+  const totalShows = filteredShows.length
+  let processedShows = 0
 
-    let items = []
-    if (!showsOnly) {
-      await new Promise(resolve => setTimeout(resolve, BROWSE_INTER_DELAY))
-      items = await findItems(apiService, show.id)
+  if (!showsOnly && totalShows > 0) {
+    log(`Processing ${totalShows} Fetch TV show directories…`)
 
-      if (titleFilter.length > 0) items = items.filter(item => titleFilter.some(t => item.title.toLowerCase().includes(t)))
+    progressBarActive = true
+    const progressBar = new cliProgress.SingleBar({
+      format: `Shows Progress |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} Shows`,
+      barCompleteChar: '\u2588',
+      barIncompleteChar: '\u2591'
+    }, cliProgress.Presets.shades_classic)
 
-      if (isRecordingFilter) {
+    progressBar.start(totalShows, 0)
+
+    const parallelShowPromises = filteredShows.map(async show => {
+      let items = await requestManager.enqueue(() => findItems(apiService, show.id))
+
+      if (titleFilter.length > 0) {
+        items = items.filter(item => titleFilter.some(t => item.title.toLowerCase().includes(t)))
+      }
+
+      if (isRecordingFilter && items.length > 0) {
         const recordingItems = []
-        log(`Checking recording status for items in: ${chalk.green(show.title)}`)
         for (const item of items) {
-          await new Promise(resolve => setTimeout(resolve, ISRECORDING_CHECK_DELAY))
-          if (await isCurrentlyRecording(item)) recordingItems.push(item)
+          const isRecording = await requestManager.enqueue(
+            () => isCurrentlyRecording(item),
+            REQUEST_QUEUE_PRIORITY.RECORDING_CHECK
+          )
+          if (isRecording) recordingItems.push(item)
         }
         items = recordingItems
-        if (items.length === 0 && !showsOnly) continue
       }
-    }
 
-    if (showsOnly || (items && items.length > 0)) results.push({ ...show, items: items })
+      processedShows++
+      progressBar.update(processedShows)
+
+      if (showsOnly || (items && items.length > 0)) {
+        return { ...show, items }
+      }
+      return null
+    })
+
+    const results = await Promise.all(parallelShowPromises)
+    progressBar.stop()
+    progressBarActive = false
+
+    return results.filter(result => result !== null)
+  } else {
+    return filteredShows.map(show => ({ ...show, items: [] }))
   }
-
-  return results
 }
 
 const getApiService = async (location) => {
@@ -418,6 +475,76 @@ const getApiService = async (location) => {
   }
 }
 
+const createRequestManager = (options = {}) => {
+  const state = {
+    concurrency: options.initialConcurrency || INITIAL_BROWSE_CONCURRENCY,
+    maxConcurrency: options.maxConcurrency || MAX_CONCURRENT_BROWSE,
+    minDelay: options.minDelay || MIN_BROWSE_DELAY,
+    currentDelay: options.minDelay || MIN_BROWSE_DELAY,
+    active: 0,
+    queue: [],
+    lastRequestTime: 0,
+    responseStats: [],
+    debug: options.debug || false
+  }
+
+  const updateStats = duration => {
+    state.responseStats.push(duration)
+    if (state.responseStats.length > 10) state.responseStats.shift()
+
+    const avgDuration = state.responseStats.reduce((sum, d) => sum + d, 0) / state.responseStats.length
+
+    if (avgDuration < 200 && state.concurrency < state.maxConcurrency) {
+      state.concurrency = Math.min(state.concurrency + 1, state.maxConcurrency)
+      if (state.debug) debug('Increasing concurrency to %d', state.concurrency)
+    } else if (avgDuration > 500 && state.concurrency > 1) {
+      state.concurrency = Math.max(state.concurrency - 1, 1)
+      state.currentDelay = Math.min(state.currentDelay * ADAPTIVE_DELAY_FACTOR, 500)
+      if (state.debug) debug('Decreasing concurrency to %d, increasing delay to %d', state.concurrency, state.currentDelay)
+    } else if (state.currentDelay > state.minDelay) {
+      state.currentDelay = Math.max(state.currentDelay / ADAPTIVE_DELAY_FACTOR, state.minDelay)
+    }
+  }
+
+  const processQueue = async () => {
+    if (state.active >= state.concurrency || state.queue.length === 0) return
+
+    const now = Date.now()
+    const timeSinceLastRequest = now - state.lastRequestTime
+
+    if (timeSinceLastRequest < state.currentDelay) {
+      setTimeout(() => processQueue(), state.currentDelay - timeSinceLastRequest)
+      return
+    }
+
+    state.active++
+    state.lastRequestTime = now
+    const start = now
+    const { fn, resolve, reject } = state.queue.shift()
+
+    try {
+      const result = await fn()
+      const duration = Date.now() - start
+      updateStats(duration)
+      resolve(result)
+    } catch (error) {
+      reject(error)
+    } finally {
+      state.active--
+      processQueue()
+    }
+  }
+
+  const enqueue = (fn, priority = REQUEST_QUEUE_PRIORITY.SHOW) =>
+    new Promise((resolve, reject) => {
+      state.queue.push({ fn, priority, resolve, reject })
+      state.queue.sort((a, b) => a.priority - b.priority)
+      processQueue()
+    })
+
+  return { enqueue }
+}
+
 const browseRequest = async (apiService, objectId = '0') => {
   const { cd_ctr: controlUrl, cd_service: serviceType } = apiService
   const payload = `<?xml version="1.0" encoding="utf-8" standalone="yes"?>
@@ -440,9 +567,15 @@ const browseRequest = async (apiService, objectId = '0') => {
   }
 
   let lastError = null
+  let delay = BROWSE_RETRY_DELAY
+
   for (let attempt = 1; attempt <= BROWSE_RETRIES; attempt++) {
     try {
-      if (attempt > 1) log(chalk.yellow(`Retrying browse for ObjectID ${objectId} (Attempt ${attempt}/${BROWSE_RETRIES})…`))
+      if (attempt > 1) {
+        log(chalk.yellow(`Retrying browse for ObjectID ${objectId} (Attempt ${attempt}/${BROWSE_RETRIES})…`))
+        await new Promise(resolve => setTimeout(resolve, delay))
+        delay = Math.min(delay * 2, 5000)
+      }
 
       const response = await axios.post(controlUrl, payload, { headers, timeout: REQUEST_TIMEOUT })
       const parsedResponse = parseXml(response.data)
@@ -452,7 +585,6 @@ const browseRequest = async (apiService, objectId = '0') => {
       if (!resultText || typeof resultText !== 'string') {
         logWarning(`Could not find valid Result string in Browse response for ObjectID ${objectId} on attempt ${attempt}`)
         lastError = new Error('Could not find valid Result string in Browse response')
-        if (attempt < BROWSE_RETRIES) await new Promise(resolve => setTimeout(resolve, BROWSE_RETRY_DELAY))
         continue
       }
 
@@ -460,7 +592,6 @@ const browseRequest = async (apiService, objectId = '0') => {
       if (!resultXml || !resultXml['DIDL-Lite']) {
         logWarning(`Failed to parse embedded DIDL-Lite XML for ObjectID ${objectId} on attempt ${attempt}`)
         lastError = new Error('Failed to parse embedded DIDL-Lite XML')
-        if (attempt < BROWSE_RETRIES) await new Promise(resolve => setTimeout(resolve, BROWSE_RETRY_DELAY))
         continue
       }
 
@@ -471,7 +602,6 @@ const browseRequest = async (apiService, objectId = '0') => {
       lastError = err
       logWarning(`Browse attempt ${attempt} failed for ObjectID ${objectId}: ${err.message}`)
       debug('Browse Error Details (ObjectID: %s, Attempt: %d): %O', objectId, attempt, err)
-      if (attempt < BROWSE_RETRIES) await new Promise(resolve => setTimeout(resolve, BROWSE_RETRY_DELAY))
     }
   }
 
@@ -805,18 +935,11 @@ const parseLocations = async (locationsUrls) => {
     const xmlParser = new XMLParser(xmlParserOptions)
     try {
       const response = await axios.get(url, { timeout: REQUEST_TIMEOUT })
-      if (XMLValidator.validate(response.data) !== true) {
-        logWarning(`Invalid XML from ${url}`)
-        return null
-      }
+      if (XMLValidator.validate(response.data) !== true) return logWarning(`Invalid XML from ${url}`)
       const xmlRoot = xmlParser.parse(response.data)
       debugXml('Parsed XML from %s: %O', url, xmlRoot)
       const device = xmlRoot?.root?.device
-      if (!device) {
-        logWarning(`Could not find device info in XML from ${url}`)
-        return null
-      }
-
+      if (!device) return logWarning(`Could not find device info in XML from ${url}`)
       return {
         url: url,
         deviceType: getXmlText(device.deviceType),
@@ -858,9 +981,7 @@ const parseXml = (xmlString) => {
 
   try {
     const isValid = XMLValidator.validate(xmlString)
-
     if (isValid === true) return xmlParser.parse(xmlString)
-
     if (argv.debug && isValid !== true) {
       logWarning(`XML validation failed: ${isValid.err.msg}`)
       debugXml('Invalid XML String: %s', xmlString.slice(0, 500) + '...')
@@ -943,10 +1064,25 @@ const formatItem = (item) => ({
   description: item.description
 })
 
-const log = (message) => console.log(message)
-const logWarning = (message) => console.log(chalk.yellow.bold(message))
-const logError = (message) => console.log(chalk.red.bold(message))
-const logHeading = (title) => console.log(chalk.blueBright.bold(`=== ${title} ===`))
+const log = message => {
+  if (progressBarActive) process.stdout.write('\r\n')
+  console.log(message)
+}
+
+const logWarning = message => {
+  if (progressBarActive) process.stdout.write('\r\n')
+  console.log(chalk.yellow.bold(message))
+}
+
+const logError = message => {
+  if (progressBarActive) process.stdout.write('\r\n')
+  console.log(chalk.red.bold(message))
+}
+
+const logHeading = (title, color = 'blueBright') => {
+  if (progressBarActive) process.stdout.write('\r\n')
+  console.log(chalk[color].bold(`=== ${title} ===`))
+}
 
 main().catch(error => {
   logError('\n--- An unexpected error occurred ---')

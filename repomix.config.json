@@ -1,0 +1,35 @@
+{
+  "output": {
+    "filePath": "repomix-output.fetchtv.txt",
+    "style": "plain",
+    "parsableStyle": false,
+    "fileSummary": true,
+    "directoryStructure": true,
+    "removeComments": false,
+    "removeEmptyLines": false,
+    "compress": false,
+    "topFilesLength": 10,
+    "showLineNumbers": false,
+    "copyToClipboard": false
+  },
+  "include": [],
+  "ignore": {
+    "useGitignore": true,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      ".github/",
+      "downloads/",
+      ".gitignore",
+      "LICENSE.txt",
+      ".dockerignore",
+      "package-lock.json",
+      "repomix.config.json"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  },
+  "tokenCount": {
+    "encoding": "o200k_base"
+  }
+}
