@@ -362,8 +362,8 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
 
   const requestManager = createRequestManager({
     debug: argv.debug,
-    initialConcurrency: 2, // Start with lower concurrency
-    initialDelay: 150, // Start with slightly higher delay
+    initialConcurrency: 2,
+    initialDelay: 150,
     adaptiveDelayFactor: 1.2
   })
 
@@ -496,8 +496,6 @@ const createRequestManager = (options = {}) => {
   const updateStats = (duration, success) => {
     if (!success) {
       state.failureCount++
-
-      // Reduce concurrency when we see multiple failures
       if (state.failureCount > 2 && state.concurrency > 1) {
         state.concurrency = Math.max(1, state.concurrency - 1)
         state.currentDelay = Math.min(state.currentDelay * 1.5, 1000)
@@ -546,7 +544,7 @@ const createRequestManager = (options = {}) => {
       updateStats(duration, true)
       resolve(result)
     } catch (error) {
-      updateStats(600, false) // Assume failed requests take longer
+      updateStats(600, false)
       reject(error)
     } finally {
       state.active--
@@ -567,11 +565,8 @@ const createRequestManager = (options = {}) => {
 const browseRequest = async (apiService, objectId = '0') => {
   const { cd_ctr: controlUrl, cd_service: serviceType } = apiService
 
-  // Check cache first
   const cacheKey = `${objectId}`
-  if (requestCache.has(cacheKey)) {
-    return requestCache.get(cacheKey)
-  }
+  if (requestCache.has(cacheKey)) return requestCache.get(cacheKey)
 
   const payload = createBrowsePayload(serviceType, objectId)
   const headers = {
@@ -582,21 +577,17 @@ const browseRequest = async (apiService, objectId = '0') => {
   let lastError = null
   let delayBase = BROWSE_RETRY_DELAY
 
-  // Skip the first attempt that usually fails and try twice immediately
-  // This avoids waiting for the known-to-fail first attempt timeout
   for (let attempt = 1; attempt <= BROWSE_RETRIES + 1; attempt++) {
     try {
-      // Only log retry messages for attempt 3+, since we expect attempt 1 to fail
       if (attempt > 2) {
         log(chalk.yellow(`Retrying browse for ObjectID ${objectId} (Attempt ${attempt-1}/${BROWSE_RETRIES})…`))
         await new Promise(resolve => setTimeout(resolve, delayBase))
         delayBase = Math.min(delayBase * 2, 5000)
       }
 
-      // Quietly make the request
       const response = await axios.post(controlUrl, payload, {
         headers,
-        timeout: attempt === 1 ? REQUEST_TIMEOUT / 2 : REQUEST_TIMEOUT // Shorter timeout for first attempt
+        timeout: attempt === 1 ? REQUEST_TIMEOUT / 2 : REQUEST_TIMEOUT
       })
 
       const parsedResponse = parseXml(response.data)
@@ -604,41 +595,28 @@ const browseRequest = async (apiService, objectId = '0') => {
 
       const resultText = findNode(parsedResponse, 'Envelope.Body.BrowseResponse.Result')
       if (!resultText || typeof resultText !== 'string') {
-        if (attempt > 1) {
-          logWarning(`Could not find valid Result string in Browse response for ObjectID ${objectId} on attempt ${attempt-1}`)
-        }
+        if (attempt > 1) logWarning(`Could not find valid Result string in Browse response for ObjectID ${objectId} on attempt ${attempt-1}`)
         lastError = new Error('Could not find valid Result string in Browse response')
         continue
       }
 
       const resultXml = parseXml(resultText)
       if (!resultXml || !resultXml['DIDL-Lite']) {
-        if (attempt > 1) {
-          logWarning(`Failed to parse embedded DIDL-Lite XML for ObjectID ${objectId} on attempt ${attempt-1}`)
-        }
+        if (attempt > 1) logWarning(`Failed to parse embedded DIDL-Lite XML for ObjectID ${objectId} on attempt ${attempt-1}`)
         lastError = new Error('Failed to parse embedded DIDL-Lite XML')
         continue
       }
 
       debug('Browse Response DIDL-Lite (ObjectID: %s, Attempt: %d): %O', objectId, attempt, resultXml['DIDL-Lite'])
 
-      // Store successful result in cache
       requestCache.set(cacheKey, resultXml['DIDL-Lite'])
       return resultXml['DIDL-Lite']
 
     } catch (err) {
       lastError = err
-
-      // Only log errors for attempt 2+ (suppress the expected first failure)
-      if (attempt > 1) {
-        logWarning(`Browse attempt ${attempt-1} failed for ObjectID ${objectId}: ${err.message}`)
-      }
+      if (attempt > 1) logWarning(`Browse attempt ${attempt-1} failed for ObjectID ${objectId}: ${err.message}`)
       debug('Browse Error Details (ObjectID: %s, Attempt: %d): %O', objectId, attempt, err)
-
-      // If first attempt fails as expected, immediately try again
-      if (attempt === 1) {
-        continue
-      }
+      if (attempt === 1) continue
     }
   }
 
@@ -664,10 +642,8 @@ const findDirectories = async (apiService, objectId = '0') => {
   const didlLite = await browseRequest(apiService, objectId)
   if (!didlLite) return null
   if (!didlLite.container) return []
-
   let containers = didlLite.container
   if (!Array.isArray(containers)) containers = [containers]
-
   return containers.map(container => ({
     title: getXmlText(container.title),
     id: getXmlAttr(container, 'id', NO_NUMBER_DEFAULT),
@@ -680,17 +656,14 @@ const findItems = async (apiService, objectId) => {
   const didlLite = await browseRequest(apiService, objectId)
   if (!didlLite) return []
   if (!didlLite.item) return []
-
   let items = didlLite.item
   if (!Array.isArray(items)) items = [items]
-
   return items.map(item => {
     const resNode = item.res
     const actualRes = Array.isArray(resNode) ? resNode[0] : resNode
     const itemClass = getXmlText(item.class) ?? ''
     const isVideo = itemClass.includes('videoItem')
     const title = getXmlText(item.title)
-
     return {
       type: itemClass,
       title: title,
