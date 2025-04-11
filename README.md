@@ -7,6 +7,10 @@ A Node.js CLI tool to manage Fetch TV recordings.
 
 Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Python) which is based on [`jinxo13/FetchTV-Helpers`](https://github.com/jinxo13/FetchTV-Helpers) (also Python).
 
+## Demo
+
+https://gist.github.com/user-attachments/assets/2daaac03-9cf8-48d9-af25-60182b2316bf
+
 ## Contents
 
 - [Quick Start](#quick-start)
