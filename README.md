@@ -19,7 +19,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 
 ## Demo
 
-https://gist.github.com/user-attachments/assets/2daaac03-9cf8-48d9-af25-60182b2316bf
+https://gist.github.com/user-attachments/assets/61dfab62-a715-4cc3-a4d1-93ee0db43827
 
 ## Quick Start
 
