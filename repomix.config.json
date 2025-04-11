@@ -22,6 +22,7 @@
       ".gitignore",
       "LICENSE.txt",
       ".dockerignore",
+      "fetchtv.**.js",
       "package-lock.json",
       "repomix.config.json"
     ]
