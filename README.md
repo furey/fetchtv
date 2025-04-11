@@ -9,8 +9,8 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 
 ## Contents
 
-- [Quick Start](#quick-start)
 - [Demo](#demo)
+- [Quick Start](#quick-start)
 - [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -19,14 +19,14 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Disclaimer](#disclaimer)
 - [Support](#support)
 
+## Demo
+
+https://gist.github.com/user-attachments/assets/2daaac03-9cf8-48d9-af25-60182b2316bf
+
 ## Quick Start
 
 - [Install](#installation) `fetchtv`
 - [Run](#usage) `fetchtv`
-
-## Demo
-
-https://gist.github.com/user-attachments/assets/2daaac03-9cf8-48d9-af25-60182b2316bf
 
 ## Features
 
