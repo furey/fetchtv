@@ -25,6 +25,7 @@ const debugNetwork = debugLib('fetchtv:network')
 
 let argv = {}
 let progressBarActive = false
+const requestCache = new Map()
 
 const BROWSE_RETRIES = 3
 const MAX_FILENAME = 255
@@ -361,7 +362,9 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
 
   const requestManager = createRequestManager({
     debug: argv.debug,
-    initialConcurrency: INITIAL_BROWSE_CONCURRENCY
+    initialConcurrency: 2, // Start with lower concurrency
+    initialDelay: 150, // Start with slightly higher delay
+    adaptiveDelayFactor: 1.2
   })
 
   const baseFolders = await requestManager.enqueue(
@@ -475,34 +478,72 @@ const getApiService = async (location) => {
   }
 }
 
+const warmupConnection = async apiService => {
+  try {
+    debug('Warming up connection to Fetch TV server...')
+    // Make a minimal request to warm up the connection
+    await axios.post(
+      apiService.cd_ctr,
+      createBrowsePayload(apiService.cd_service, '0', 1),
+      {
+        headers: {
+          'Content-Type': 'text/xml;charset="utf-8"',
+          'SOAPAction': `"${apiService.cd_service}#Browse"`
+        },
+        timeout: REQUEST_TIMEOUT * 2
+      }
+    )
+    debug('Connection warm-up successful')
+    return true
+  } catch (err) {
+    debug('Connection warm-up failed: %s', err.message)
+    return false
+  }
+}
+
 const createRequestManager = (options = {}) => {
   const state = {
     concurrency: options.initialConcurrency || INITIAL_BROWSE_CONCURRENCY,
     maxConcurrency: options.maxConcurrency || MAX_CONCURRENT_BROWSE,
     minDelay: options.minDelay || MIN_BROWSE_DELAY,
-    currentDelay: options.minDelay || MIN_BROWSE_DELAY,
+    currentDelay: options.initialDelay || options.minDelay || MIN_BROWSE_DELAY,
+    adaptiveDelayFactor: options.adaptiveDelayFactor || ADAPTIVE_DELAY_FACTOR,
     active: 0,
     queue: [],
     lastRequestTime: 0,
     responseStats: [],
+    failureCount: 0,
     debug: options.debug || false
   }
 
-  const updateStats = duration => {
+  const updateStats = (duration, success) => {
+    if (!success) {
+      state.failureCount++
+
+      // Reduce concurrency when we see multiple failures
+      if (state.failureCount > 2 && state.concurrency > 1) {
+        state.concurrency = Math.max(1, state.concurrency - 1)
+        state.currentDelay = Math.min(state.currentDelay * 1.5, 1000)
+        debug('Multiple failures detected, reducing concurrency to %d, increasing delay to %d',
+             state.concurrency, state.currentDelay)
+      }
+    } else {
+      state.failureCount = Math.max(0, state.failureCount - 1)
+    }
+
     state.responseStats.push(duration)
     if (state.responseStats.length > 10) state.responseStats.shift()
 
     const avgDuration = state.responseStats.reduce((sum, d) => sum + d, 0) / state.responseStats.length
 
-    if (avgDuration < 200 && state.concurrency < state.maxConcurrency) {
+    if (avgDuration < 300 && state.concurrency < state.maxConcurrency && state.failureCount === 0) {
       state.concurrency = Math.min(state.concurrency + 1, state.maxConcurrency)
       if (state.debug) debug('Increasing concurrency to %d', state.concurrency)
-    } else if (avgDuration > 500 && state.concurrency > 1) {
+    } else if (avgDuration > 600 && state.concurrency > 1) {
       state.concurrency = Math.max(state.concurrency - 1, 1)
-      state.currentDelay = Math.min(state.currentDelay * ADAPTIVE_DELAY_FACTOR, 500)
-      if (state.debug) debug('Decreasing concurrency to %d, increasing delay to %d', state.concurrency, state.currentDelay)
-    } else if (state.currentDelay > state.minDelay) {
-      state.currentDelay = Math.max(state.currentDelay / ADAPTIVE_DELAY_FACTOR, state.minDelay)
+      state.currentDelay = Math.min(state.currentDelay * state.adaptiveDelayFactor, 800)
+      if (state.debug) debug('Decreasing concurrency to %d, increasing delay to %d',
+                            state.concurrency, state.currentDelay)
     }
   }
 
@@ -525,9 +566,10 @@ const createRequestManager = (options = {}) => {
     try {
       const result = await fn()
       const duration = Date.now() - start
-      updateStats(duration)
+      updateStats(duration, true)
       resolve(result)
     } catch (error) {
+      updateStats(600, false) // Assume failed requests take longer
       reject(error)
     } finally {
       state.active--
@@ -547,7 +589,87 @@ const createRequestManager = (options = {}) => {
 
 const browseRequest = async (apiService, objectId = '0') => {
   const { cd_ctr: controlUrl, cd_service: serviceType } = apiService
-  const payload = `<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+
+  // Check cache first
+  const cacheKey = `${objectId}`
+  if (requestCache.has(cacheKey)) {
+    return requestCache.get(cacheKey)
+  }
+
+  const payload = createBrowsePayload(serviceType, objectId)
+  const headers = {
+    'Content-Type': 'text/xml;charset="utf-8"',
+    'SOAPAction': `"${serviceType}#Browse"`
+  }
+
+  let lastError = null
+  let delayBase = BROWSE_RETRY_DELAY
+
+  // Skip the first attempt that usually fails and try twice immediately
+  // This avoids waiting for the known-to-fail first attempt timeout
+  for (let attempt = 1; attempt <= BROWSE_RETRIES + 1; attempt++) {
+    try {
+      // Only log retry messages for attempt 3+, since we expect attempt 1 to fail
+      if (attempt > 2) {
+        log(chalk.yellow(`Retrying browse for ObjectID ${objectId} (Attempt ${attempt-1}/${BROWSE_RETRIES})…`))
+        await new Promise(resolve => setTimeout(resolve, delayBase))
+        delayBase = Math.min(delayBase * 2, 5000)
+      }
+
+      // Quietly make the request
+      const response = await axios.post(controlUrl, payload, {
+        headers,
+        timeout: attempt === 1 ? REQUEST_TIMEOUT / 2 : REQUEST_TIMEOUT // Shorter timeout for first attempt
+      })
+
+      const parsedResponse = parseXml(response.data)
+      debug('Browse Response SOAP (ObjectID: %s, Attempt: %d): %O', objectId, attempt, parsedResponse)
+
+      const resultText = findNode(parsedResponse, 'Envelope.Body.BrowseResponse.Result')
+      if (!resultText || typeof resultText !== 'string') {
+        if (attempt > 1) {
+          logWarning(`Could not find valid Result string in Browse response for ObjectID ${objectId} on attempt ${attempt-1}`)
+        }
+        lastError = new Error('Could not find valid Result string in Browse response')
+        continue
+      }
+
+      const resultXml = parseXml(resultText)
+      if (!resultXml || !resultXml['DIDL-Lite']) {
+        if (attempt > 1) {
+          logWarning(`Failed to parse embedded DIDL-Lite XML for ObjectID ${objectId} on attempt ${attempt-1}`)
+        }
+        lastError = new Error('Failed to parse embedded DIDL-Lite XML')
+        continue
+      }
+
+      debug('Browse Response DIDL-Lite (ObjectID: %s, Attempt: %d): %O', objectId, attempt, resultXml['DIDL-Lite'])
+
+      // Store successful result in cache
+      requestCache.set(cacheKey, resultXml['DIDL-Lite'])
+      return resultXml['DIDL-Lite']
+
+    } catch (err) {
+      lastError = err
+
+      // Only log errors for attempt 2+ (suppress the expected first failure)
+      if (attempt > 1) {
+        logWarning(`Browse attempt ${attempt-1} failed for ObjectID ${objectId}: ${err.message}`)
+      }
+      debug('Browse Error Details (ObjectID: %s, Attempt: %d): %O', objectId, attempt, err)
+
+      // If first attempt fails as expected, immediately try again
+      if (attempt === 1) {
+        continue
+      }
+    }
+  }
+
+  logError(`Browse request failed definitively for ObjectID ${objectId} after ${BROWSE_RETRIES} attempts. Last error: ${lastError?.message || 'Unknown'}`)
+  return null
+}
+
+const createBrowsePayload = (serviceType, objectId, requestedCount = 0) => `<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
  <s:Body>
   <u:Browse xmlns:u="${serviceType}">
@@ -555,59 +677,11 @@ const browseRequest = async (apiService, objectId = '0') => {
    <BrowseFlag>BrowseDirectChildren</BrowseFlag>
    <Filter>*</Filter>
    <StartingIndex>0</StartingIndex>
-   <RequestedCount>0</RequestedCount>
+   <RequestedCount>${requestedCount}</RequestedCount>
    <SortCriteria></SortCriteria>
   </u:Browse>
  </s:Body>
 </s:Envelope>`
-
-  const headers = {
-    'Content-Type': 'text/xml;charset="utf-8"',
-    'SOAPAction': `"${serviceType}#Browse"`
-  }
-
-  let lastError = null
-  let delay = BROWSE_RETRY_DELAY
-
-  for (let attempt = 1; attempt <= BROWSE_RETRIES; attempt++) {
-    try {
-      if (attempt > 1) {
-        log(chalk.yellow(`Retrying browse for ObjectID ${objectId} (Attempt ${attempt}/${BROWSE_RETRIES})…`))
-        await new Promise(resolve => setTimeout(resolve, delay))
-        delay = Math.min(delay * 2, 5000)
-      }
-
-      const response = await axios.post(controlUrl, payload, { headers, timeout: REQUEST_TIMEOUT })
-      const parsedResponse = parseXml(response.data)
-      debug('Browse Response SOAP (ObjectID: %s, Attempt: %d): %O', objectId, attempt, parsedResponse)
-
-      const resultText = findNode(parsedResponse, 'Envelope.Body.BrowseResponse.Result')
-      if (!resultText || typeof resultText !== 'string') {
-        logWarning(`Could not find valid Result string in Browse response for ObjectID ${objectId} on attempt ${attempt}`)
-        lastError = new Error('Could not find valid Result string in Browse response')
-        continue
-      }
-
-      const resultXml = parseXml(resultText)
-      if (!resultXml || !resultXml['DIDL-Lite']) {
-        logWarning(`Failed to parse embedded DIDL-Lite XML for ObjectID ${objectId} on attempt ${attempt}`)
-        lastError = new Error('Failed to parse embedded DIDL-Lite XML')
-        continue
-      }
-
-      debug('Browse Response DIDL-Lite (ObjectID: %s, Attempt: %d): %O', objectId, attempt, resultXml['DIDL-Lite'])
-      return resultXml['DIDL-Lite']
-
-    } catch (err) {
-      lastError = err
-      logWarning(`Browse attempt ${attempt} failed for ObjectID ${objectId}: ${err.message}`)
-      debug('Browse Error Details (ObjectID: %s, Attempt: %d): %O', objectId, attempt, err)
-    }
-  }
-
-  logError(`Browse request failed definitively for ObjectID ${objectId} after ${BROWSE_RETRIES} attempts. Last error: ${lastError?.message || 'Unknown'}`)
-  return null
-}
 
 const findDirectories = async (apiService, objectId = '0') => {
   const didlLite = await browseRequest(apiService, objectId)
