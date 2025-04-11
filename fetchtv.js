@@ -39,11 +39,9 @@ const MIN_BROWSE_DELAY = 50
 const NO_NUMBER_DEFAULT = ''
 const REQUEST_TIMEOUT = 15000
 const DISCOVERY_TIMEOUT = 3000
-const BROWSE_INTER_DELAY = 150
 const BROWSE_RETRY_DELAY = 1500
 const MAX_CONCURRENT_BROWSE = 5
 const ADAPTIVE_DELAY_FACTOR = 1.5
-const ISRECORDING_CHECK_DELAY = 200
 const INITIAL_BROWSE_CONCURRENCY = 3
 const SAVE_FILE_NAME = 'fetchtv.json'
 const MAX_OCTET_RECORDING = 4398046510080
@@ -58,16 +56,21 @@ const REQUEST_QUEUE_PRIORITY = {
   RECORDING_CHECK: 3
 }
 
+const httpClient = axios.create({
+  timeout: REQUEST_TIMEOUT,
+  maxContentLength: Infinity,
+  keepAlive: true
+})
+
 const main = async () => {
   registerExitHandlers()
 
   argv = await yargs(hideBin(process.argv))
-    .middleware((argv) => {
+    .middleware(argv => {
       const command = argv._[0]
-      if (command) {
-        const commandMatch = ['info', 'recordings', 'shows'].find(cmd => cmd.startsWith(command))
-        if (commandMatch) argv._[0] = commandMatch
-      }
+      if (!command) return
+      const commandMatch = ['info', 'recordings', 'shows'].find(cmd => cmd.startsWith(command))
+      if (commandMatch) argv._[0] = commandMatch
     })
     .command('info', 'Returns Fetch TV server details')
     .command('recordings', 'List episode recordings')
@@ -102,7 +105,6 @@ const main = async () => {
   logHeading(`Started: ${new Date().toLocaleString()}`)
 
   const fetchServer = await discoverFetch({ ip: argv.ip, port: argv.port })
-
   if (!fetchServer) {
     logHeading(`Done (Discovery Failed): ${new Date().toLocaleString()}`)
     process.exit(1)
@@ -143,273 +145,6 @@ const main = async () => {
   logHeading(`Done: ${new Date().toLocaleString()}`)
 }
 
-const processFilter = (arr) =>
-  _(arr)
-    .castArray()
-    .flatMap(f => typeof f === 'string' ? f.split(',') : [f])
-    .map(s => String(s).trim().toLowerCase())
-    .compact()
-    .value()
-
-const printInfo = (fetchServer) => {
-  const table = new Table({ head: [chalk.cyan('Field'), chalk.cyan('Value')] })
-  table.push(
-    { 'Type': fetchServer.deviceType || 'N/A' },
-    { 'Name': fetchServer.friendlyName || 'N/A' },
-    { 'Manufacturer': fetchServer.manufacturer || 'N/A' },
-    { 'Manufacturer URL': fetchServer.manufacturerURL || 'N/A' },
-    { 'Model': fetchServer.modelName || 'N/A' },
-    { 'Model Desc': fetchServer.modelDescription || 'N/A' },
-    { 'Model No': fetchServer.modelNumber || 'N/A' }
-  )
-  log(table.toString())
-}
-
-const printRecordings = (recordings, { jsonOutput, showsOnly }) => {
-  const sortedRecordings = sortRecordingsByTitle(recordings)
-
-  if (jsonOutput) {
-    const output = sortedRecordings.map(rec => {
-      const item = { id: rec.id, title: rec.title }
-      if (!showsOnly) item.items = rec.items?.map(formatItem)
-      return item
-    })
-
-    logHeading('Start JSON Output', 'greenBright')
-    console.log(JSON.stringify(output, null, 2))
-    return logHeading('End JSON Output', 'greenBright')
-  }
-
-  const context = showsOnly ? 'Shows' : 'Recordings'
-  logHeading(`Listing ${context}`)
-
-  if (!sortedRecordings || sortedRecordings.length === 0) return logWarning(`No ${context} found matching criteria!`)
-
-  sortedRecordings.forEach(recording => {
-    const bullet = showsOnly ? '' : '📁 '
-    log(chalk.green(`${bullet}${recording.title}`))
-    if (recording.items && recording.items.length > 0) {
-      recording.items.forEach(item => {
-        const durationStr = new Date(item.duration * 1000).toISOString().substr(11, 8)
-        const sizeFormatted = filesize(item.size)
-        log(`  ${chalk.whiteBright(item.title)} ${chalk.gray(`${durationStr} ${sizeFormatted}`)}`)
-      })
-    } else {
-      if (!showsOnly) log(chalk.gray('  (No items listed based on current filters)'))
-    }
-  })
-}
-
-const handleSaveAction = async (recordings, { savePath, overwrite, jsonOutput }) => {
-  logHeading('Saving Recordings')
-
-  try {
-    try {
-      const stats = await fs.stat(savePath)
-      if (!stats.isDirectory()) {
-        logError(`Save path "${savePath}" exists but is not a directory.`)
-        process.exit(1)
-      }
-    } catch (statError) {
-      if (statError.code === 'ENOENT') {
-        log(chalk.gray(`Save path "${savePath}" does not exist. Creating it now…`))
-        await fs.mkdir(savePath, { recursive: true })
-      } else {
-        throw statError
-      }
-    }
-    const jsonResult = await saveRecordings(recordings, { savePath, overwrite })
-    if (jsonOutput) {
-      logHeading('Start JSON Output', 'greenBright')
-      console.log(JSON.stringify(jsonResult, null, 2))
-      return logHeading('End JSON Output', 'greenBright')
-    }
-  } catch (saveError) {
-    logError(`Error during save process: ${saveError.message}`)
-    if (argv.debug) console.error(saveError.stack)
-    process.exit(1)
-  }
-}
-
-const saveRecordings = async (recordings, { savePath, overwrite }) => {
-  const savedFilesDb = await loadSavedFiles(savePath)
-  const jsonResults = []
-  const tasks = []
-
-  for (const show of recordings) {
-    if (!show.items || show.items.length === 0) continue
-
-    for (const item of show.items) {
-      const showDirName = createValidFilename(show.title)
-      const showDirPath = path.join(savePath, showDirName)
-      const itemFileName = `${createValidFilename(item.title)}.mpeg`
-      const filePath = path.join(showDirPath, itemFileName)
-      const lockFilePath = `${filePath}${CONST_LOCK}`
-
-      if (fsc.existsSync(lockFilePath)) {
-        const isStale = await isLockFileStale(lockFilePath)
-        if (isStale) {
-          log(chalk.yellow(`Removing stale lock file for ${item.title}`))
-          try {
-            fsc.unlinkSync(lockFilePath)
-            debug('Removed stale lock file: %s', lockFilePath)
-          } catch (err) {
-            debug('Error removing stale lock file: %O', err)
-          }
-        }
-      }
-    }
-  }
-
-  for (const show of recordings) {
-    if (!show.items || show.items.length === 0) continue
-
-    for (const item of show.items) {
-      const showDirName = createValidFilename(show.title)
-      const showDirPath = path.join(savePath, showDirName)
-      const itemFileName = `${createValidFilename(item.title)}.mpeg`
-      const filePath = path.join(showDirPath, itemFileName)
-      const lockFilePath = `${filePath}${CONST_LOCK}`
-      const lockExists = fsc.existsSync(lockFilePath)
-
-      const isCompletedFile = savedFilesDb[item.id] && !overwrite
-
-      let hasPartialFile = false
-      try {
-        if (fsc.existsSync(filePath) && !isCompletedFile) {
-          const stats = await fs.stat(filePath)
-          hasPartialFile = stats.size > 0 && stats.size < item.size
-        }
-      } catch (err) {
-        debug('Error checking for partial file %s: %O', filePath, err)
-      }
-
-      if (lockExists) {
-        log(chalk.gray(`Already writing ${item.title} (lock file exists), skipping.`))
-        if (argv.json) jsonResults.push({
-          item: formatItem(item),
-          recorded: false,
-          warning: 'Already writing (lock file exists) skipping'
-        })
-        continue
-      }
-
-      if (isCompletedFile && !hasPartialFile) {
-        log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
-        if (argv.json) jsonResults.push({
-          item: formatItem(item),
-          recorded: false,
-          warning: 'Skipped (already saved)'
-        })
-        continue
-      }
-
-      tasks.push({ item, filePath, showDirPath, showTitle: show.title })
-
-      if (hasPartialFile) {
-        log(chalk.cyan(`Found partial download for: ${show.title} / ${item.title}`))
-      }
-    }
-  }
-
-  if (tasks.length === 0) {
-    log('There is nothing new to record.')
-    return jsonResults
-  }
-
-  log(`Saving ${tasks.length} new recording${tasks.length > 1 ? 's' : ''}…`)
-
-  progressBarActive = true
-  const multiBar = new cliProgress.MultiBar({
-    clearOnComplete: false,
-    hideCursor: true,
-    format: ' {bar} | {percentage}% | {filename}'
-  }, cliProgress.Presets.shades_classic)
-
-  activeMultiBar = multiBar
-
-  const activePromises = new Set()
-
-  for (const task of tasks) {
-    while (activePromises.size >= MAX_CONCURRENT_DOWNLOADS) await Promise.race(activePromises)
-
-    const progressBar = multiBar.create(task.item.size || 0, 0, {
-      filename: chalk.whiteBright(path.basename(task.filePath).slice(0, 20).padEnd(20)),
-      speed: 'N/A',
-      eta: 'N/A',
-      value: filesize(0),
-      total: filesize(task.item.size || 0)
-    })
-
-    progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} | {speed}/s | ETA: {eta}`
-
-    const promise = downloadFile(task.item, task.filePath, progressBar, overwrite)
-      .then(async (downloadResult) => {
-        const resultEntry = {
-          item: formatItem(task.item),
-          recorded: downloadResult.recorded,
-          resumed: downloadResult.resumed || false
-        }
-
-        if (downloadResult.warning) resultEntry.warning = downloadResult.warning
-        if (downloadResult.error) resultEntry.error = downloadResult.error
-        jsonResults.push(resultEntry)
-
-        if (downloadResult.recorded) await addSavedFile(savePath, savedFilesDb, task.item)
-      })
-      .catch((error) => {
-        logError(`Unexpected error processing save result for ${task.item.title}: ${error.message}`)
-        jsonResults.push({
-          item: formatItem(task.item),
-          recorded: false,
-          error: `Processing error: ${error.message}`
-        })
-
-        try {
-          const lockFilePath = `${task.filePath}${CONST_LOCK}`
-          if (fsc.existsSync(lockFilePath)) {
-            fsc.unlinkSync(lockFilePath)
-            untrackLockFile(lockFilePath)
-          }
-        } catch (cleanupErr) {
-          debug('Error cleaning lock file after promise error: %O', cleanupErr)
-        }
-
-        if (progressBar) progressBar.stop()
-      })
-      .finally(() => {
-        activePromises.delete(promise)
-      })
-
-    activePromises.add(promise)
-  }
-
-  registerExitHandlers()
-
-  try {
-    await Promise.allSettled(activePromises)
-  } finally {
-    if (!isShuttingDown) {
-      multiBar.stop()
-      activeMultiBar = null
-      progressBarActive = false
-    }
-  }
-
-  return jsonResults
-}
-
-const isLockFileStale = async (lockFilePath) => {
-  try {
-    const stats = await fs.stat(lockFilePath)
-    const lockAge = Date.now() - stats.mtimeMs
-    return lockAge > 600000
-  } catch (err) {
-    debug('Error checking lock file stats: %O', err)
-    return true
-  }
-}
-
 const discoverFetch = async ({ ip, port }) => {
   const locations = new Set()
 
@@ -418,7 +153,7 @@ const discoverFetch = async ({ ip, port }) => {
   } else {
     log('Looking for Fetch TV servers…')
     const client = new SsdpClient()
-    client.on('response', (headers, statusCode, rinfo) => {
+    client.on('response', (headers) => {
       if (headers.LOCATION) locations.add(headers.LOCATION)
       debug('SSDP Response Headers: %O', headers)
     })
@@ -477,8 +212,7 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
     () => findDirectories(apiService, '0'),
     REQUEST_QUEUE_PRIORITY.ROOT
   )
-
-  if (baseFolders === null) {
+  if (!baseFolders) {
     logError('Failed to browse root directory (ObjectID 0) after retries. Cannot list recordings.')
     return []
   }
@@ -493,8 +227,7 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
     () => findDirectories(apiService, recordingsFolder.id),
     REQUEST_QUEUE_PRIORITY.SHOWS_FOLDER
   )
-
-  if (showFolders === null) {
+  if (!showFolders) {
     logError(`Failed to browse the main "Recordings" directory (ObjectID ${recordingsFolder.id}) after retries. Cannot list shows.`)
     return []
   }
@@ -506,66 +239,632 @@ const getFetchRecordings = async (location, { folderFilter, excludeFilter, title
     return include && !exclude
   })
 
+  if (showsOnly || filteredShows.length === 0)
+    return filteredShows.map(show => ({ ...show, items: [] }))
+
   const totalShows = filteredShows.length
   let processedShows = 0
 
-  if (!showsOnly && totalShows > 0) {
-    log(`Processing ${totalShows} Fetch TV show directories…`)
+  log(`Processing ${totalShows} Fetch TV show directories…`)
+  progressBarActive = true
+  const progressBar = new cliProgress.SingleBar({
+    format: `Shows Progress |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} Shows`,
+    barCompleteChar: '\u2588',
+    barIncompleteChar: '\u2591'
+  }, cliProgress.Presets.shades_classic)
 
-    progressBarActive = true
-    const progressBar = new cliProgress.SingleBar({
-      format: `Shows Progress |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} Shows`,
-      barCompleteChar: '\u2588',
-      barIncompleteChar: '\u2591'
-    }, cliProgress.Presets.shades_classic)
+  progressBar.start(totalShows, 0)
 
-    progressBar.start(totalShows, 0)
+  const batchSize = 5
+  const results = []
 
-    const batchSize = 5
-    const results = []
+  for (let i = 0; i < filteredShows.length; i += batchSize) {
+    const batch = filteredShows.slice(i, i + batchSize)
+    const batchPromises = batch.map(async show => {
+      let items = await requestManager.enqueue(() => findItems(apiService, show.id))
 
-    for (let i = 0; i < filteredShows.length; i += batchSize) {
-      const batch = filteredShows.slice(i, i + batchSize)
-      const batchPromises = batch.map(async show => {
-        let items = await requestManager.enqueue(() => findItems(apiService, show.id))
+      if (titleFilter.length > 0)
+        items = items.filter(item => titleFilter.some(t => item.title.toLowerCase().includes(t)))
 
-        if (titleFilter.length > 0) {
-          items = items.filter(item => titleFilter.some(t => item.title.toLowerCase().includes(t)))
+      if (isRecordingFilter && items.length > 0) {
+        const recordingItems = []
+        for (const item of items) {
+          const isRecording = await requestManager.enqueue(
+            () => isCurrentlyRecording(item),
+            REQUEST_QUEUE_PRIORITY.RECORDING_CHECK
+          )
+          if (isRecording) recordingItems.push(item)
         }
+        items = recordingItems
+      }
 
-        if (isRecordingFilter && items.length > 0) {
-          const recordingItems = []
-          for (const item of items) {
-            const isRecording = await requestManager.enqueue(
-              () => isCurrentlyRecording(item),
-              REQUEST_QUEUE_PRIORITY.RECORDING_CHECK
-            )
-            if (isRecording) recordingItems.push(item)
-          }
-          items = recordingItems
-        }
+      processedShows++
+      progressBar.update(processedShows)
 
-        processedShows++
-        progressBar.update(processedShows)
+      if (!items || items.length === 0) return null
+      return { ...show, items }
+    })
 
-        if (showsOnly || (items && items.length > 0)) {
-          return { ...show, items }
-        }
-        return null
-      })
+    const batchResults = await Promise.all(batchPromises)
+    results.push(...batchResults.filter(Boolean))
+  }
 
-      const batchResults = await Promise.all(batchPromises)
-      results.push(...batchResults.filter(Boolean))
+  progressBar.stop()
+  progressBarActive = false
+
+  return results
+}
+
+const handleSaveAction = async (recordings, { savePath, overwrite, jsonOutput }) => {
+  logHeading('Saving Recordings')
+
+  try {
+    try {
+      const stats = await fs.stat(savePath)
+      if (!stats.isDirectory()) {
+        logError(`Save path "${savePath}" exists but is not a directory.`)
+        process.exit(1)
+      }
+    } catch (statError) {
+      if (statError.code === 'ENOENT') {
+        log(chalk.gray(`Save path "${savePath}" does not exist. Creating it now…`))
+        await fs.mkdir(savePath, { recursive: true })
+      } else {
+        throw statError
+      }
     }
 
-    progressBar.stop()
-    progressBarActive = false
+    const jsonResult = await saveRecordings(recordings, { savePath, overwrite })
 
-    return results
-  } else {
-    return filteredShows.map(show => ({ ...show, items: [] }))
+    if (!jsonOutput) return
+
+    logHeading('Start JSON Output', 'greenBright')
+    console.log(JSON.stringify(jsonResult, null, 2))
+    logHeading('End JSON Output', 'greenBright')
+  } catch (saveError) {
+    logError(`Error during save process: ${saveError.message}`)
+    if (argv.debug) console.error(saveError.stack)
+    process.exit(1)
   }
 }
+
+const saveRecordings = async (recordings, { savePath, overwrite }) => {
+  const savedFilesDb = await loadSavedFiles(savePath)
+  const jsonResults = []
+  const tasks = []
+
+  for (const show of recordings) {
+    if (!show.items || show.items.length === 0) continue
+
+    for (const item of show.items) {
+      const showDirName = createValidFilename(show.title)
+      const showDirPath = path.join(savePath, showDirName)
+      const itemFileName = `${createValidFilename(item.title)}.mpeg`
+      const filePath = path.join(showDirPath, itemFileName)
+      const lockFilePath = `${filePath}${CONST_LOCK}`
+
+      if (fsc.existsSync(lockFilePath)) {
+        const isStale = await isLockFileStale(lockFilePath)
+        if (isStale) {
+          log(chalk.yellow(`Removing stale lock file for ${item.title}`))
+          try {
+            fsc.unlinkSync(lockFilePath)
+            debug('Removed stale lock file: %s', lockFilePath)
+          } catch (err) {
+            debug('Error removing stale lock file: %O', err)
+          }
+        }
+      }
+    }
+  }
+
+  for (const show of recordings) {
+    if (!show.items || show.items.length === 0) continue
+
+    for (const item of show.items) {
+      const showDirName = createValidFilename(show.title)
+      const showDirPath = path.join(savePath, showDirName)
+      const itemFileName = `${createValidFilename(item.title)}.mpeg`
+      const filePath = path.join(showDirPath, itemFileName)
+      const lockFilePath = `${filePath}${CONST_LOCK}`
+      const lockExists = fsc.existsSync(lockFilePath)
+      const isCompletedFile = savedFilesDb[item.id] && !overwrite
+
+      let hasPartialFile = false
+      try {
+        if (fsc.existsSync(filePath) && !isCompletedFile) {
+          const stats = await fs.stat(filePath)
+          hasPartialFile = stats.size > 0 && stats.size < item.size
+        }
+      } catch (err) {
+        debug('Error checking for partial file %s: %O', filePath, err)
+      }
+
+      if (lockExists) {
+        log(chalk.gray(`Already writing ${item.title} (lock file exists), skipping.`))
+        if (argv.json) jsonResults.push({
+          item: formatItem(item),
+          recorded: false,
+          warning: 'Already writing (lock file exists) skipping'
+        })
+        continue
+      }
+
+      if (isCompletedFile && !hasPartialFile) {
+        log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
+        if (argv.json) jsonResults.push({
+          item: formatItem(item),
+          recorded: false,
+          warning: 'Skipped (already saved)'
+        })
+        continue
+      }
+
+      tasks.push({ item, filePath, showDirPath, showTitle: show.title })
+    }
+  }
+
+  if (tasks.length === 0) {
+    log('There is nothing new to record.')
+    return jsonResults
+  }
+
+  log(`Saving ${tasks.length} new recording${tasks.length > 1 ? 's' : ''}…`)
+
+  progressBarActive = true
+  const multiBar = new cliProgress.MultiBar({
+    clearOnComplete: false,
+    hideCursor: true,
+    format: ' {bar} | {percentage}% | {filename}'
+  }, cliProgress.Presets.shades_classic)
+
+  activeMultiBar = multiBar
+  const activePromises = new Set()
+
+  for (const task of tasks) {
+    while (activePromises.size >= MAX_CONCURRENT_DOWNLOADS)
+      await Promise.race(activePromises)
+
+    const progressBar = multiBar.create(task.item.size || 0, 0, {
+      filename: chalk.whiteBright(path.basename(task.filePath).slice(0, 20).padEnd(20)),
+      speed: 'N/A',
+      eta: 'N/A',
+      value: filesize(0),
+      total: filesize(task.item.size || 0)
+    })
+
+    progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} | {speed}/s | ETA: {eta}`
+
+    const promise = downloadFile(task.item, task.filePath, progressBar, overwrite)
+      .then(async (downloadResult) => {
+        const resultEntry = {
+          item: formatItem(task.item),
+          recorded: downloadResult.recorded,
+          resumed: downloadResult.resumed || false
+        }
+
+        if (downloadResult.warning) resultEntry.warning = downloadResult.warning
+        if (downloadResult.error) resultEntry.error = downloadResult.error
+        jsonResults.push(resultEntry)
+
+        if (downloadResult.recorded)
+          await addSavedFile(savePath, savedFilesDb, task.item)
+      })
+      .catch((error) => {
+        logError(`Unexpected error processing save result for ${task.item.title}: ${error.message}`)
+        jsonResults.push({
+          item: formatItem(task.item),
+          recorded: false,
+          error: `Processing error: ${error.message}`
+        })
+
+        try {
+          const lockFilePath = `${task.filePath}${CONST_LOCK}`
+          if (fsc.existsSync(lockFilePath)) {
+            fsc.unlinkSync(lockFilePath)
+            untrackLockFile(lockFilePath)
+          }
+        } catch (cleanupErr) {
+          debug('Error cleaning lock file after promise error: %O', cleanupErr)
+        }
+
+        if (progressBar) progressBar.stop()
+      })
+      .finally(() => {
+        activePromises.delete(promise)
+      })
+
+    activePromises.add(promise)
+  }
+
+  registerExitHandlers()
+
+  try {
+    await Promise.allSettled(activePromises)
+  } finally {
+    if (!isShuttingDown) {
+      multiBar.stop()
+      activeMultiBar = null
+      progressBarActive = false
+    }
+  }
+
+  return jsonResults
+}
+
+const downloadFile = async (item, filePath, progressBar, overwrite = false) => {
+  const lockFilePath = `${filePath}${CONST_LOCK}`
+  let writer = null
+  let responseStream = null
+  let existingSize = 0
+  let isResuming = false
+  let validResumable = false
+  let totalLength = 0
+
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
+
+    try {
+      if (fsc.existsSync(filePath)) {
+        if (overwrite) {
+          console.log(chalk.yellow(`Overwriting: ${item.title}`))
+          fsc.unlinkSync(filePath)
+          isResuming = false
+          existingSize = 0
+        } else {
+          const stats = await fs.stat(filePath)
+          existingSize = stats.size
+          if (existingSize > 0) {
+            try {
+              const fileHandle = await fs.open(filePath, 'r')
+              const buffer = Buffer.alloc(Math.min(8192, existingSize))
+              await fileHandle.read(buffer, 0, buffer.length, Math.max(0, existingSize - buffer.length))
+              await fileHandle.close()
+
+              isResuming = true
+              validResumable = true
+            } catch (validErr) {
+              debug('Error validating file for resumption: %O', validErr)
+              isResuming = false
+              existingSize = 0
+            }
+          }
+        }
+      }
+    } catch (statErr) {
+      debug('Error checking file stats for resume: %O', statErr)
+      existingSize = 0
+      isResuming = false
+    }
+
+    try {
+      if (fsc.existsSync(lockFilePath)) {
+        fsc.unlinkSync(lockFilePath)
+        debug('Removed existing lock file: %s', lockFilePath)
+      }
+    } catch (lockErr) {
+      debug('Error removing existing lock file: %O', lockErr)
+    }
+
+    fsc.writeFileSync(lockFilePath, '')
+    trackLockFile(lockFilePath)
+
+    if (isResuming && validResumable) {
+      console.log(`${chalk.cyan(`Resuming download for: ${item.title}`)} ${chalk.gray(`(from ${filesize(existingSize)})`)}`)
+    } else if (isResuming && !validResumable) {
+      console.log(chalk.yellow(`Cannot resume potentially corrupted file for ${item.title}, restarting download`))
+      isResuming = false
+      existingSize = 0
+    }
+
+    const headers = {}
+    if (isResuming && existingSize > 0) headers.Range = `bytes=${existingSize}-`
+
+    const response = await httpClient.get(item.url, {
+      responseType: 'stream',
+      timeout: REQUEST_TIMEOUT * 20,
+      headers
+    })
+
+    responseStream = response.data
+    totalLength = isResuming
+      ? parseInt(response.headers['content-length'] || '0', 10) + existingSize
+      : parseInt(response.headers['content-length'] || '0', 10)
+
+    debug('Download Headers for %s: %O', item.title, response.headers)
+    debug('Resume Status: %s, existing size: %d, response status: %d',
+          isResuming ? 'yes' : 'no', existingSize, response.status)
+
+    if (totalLength === MAX_OCTET_RECORDING) {
+      logWarning(`Skipping ${item.title}, it appears to be currently recording.`)
+      responseStream.destroy()
+
+      try {
+        fsc.unlinkSync(lockFilePath)
+        untrackLockFile(lockFilePath)
+      } catch (delErr) {
+        logWarning(`Could not delete lock file on skip ${lockFilePath}: ${delErr.message}`)
+      }
+
+      if (progressBar) progressBar.stop()
+      return { recorded: false, warning: "Skipping item, it's currently recording" }
+    }
+
+    if (totalLength === 0 && !isResuming) {
+      logWarning(`Skipping ${item.title}, content length is zero.`)
+      responseStream.destroy()
+
+      try {
+        fsc.unlinkSync(lockFilePath)
+        untrackLockFile(lockFilePath)
+      } catch (delErr) {
+        logWarning(`Could not delete lock file on zero size ${lockFilePath}: ${delErr.message}`)
+      }
+
+      if (progressBar) progressBar.stop()
+      return { recorded: false, warning: 'Skipping item, content length is zero' }
+    }
+
+    writer = isResuming
+      ? fsc.createWriteStream(filePath, { flags: 'a' })
+      : fsc.createWriteStream(filePath)
+
+    if (progressBar) {
+      progressBar.setTotal(totalLength)
+      progressBar.update(existingSize, {
+        speed: 'N/A',
+        eta: 'N/A',
+        value: filesize(existingSize),
+        total: filesize(totalLength)
+      })
+    }
+
+    let downloadedLength = existingSize
+    let lastUpdateTime = progressBar?.startTime || Date.now()
+
+    responseStream.on('data', (chunk) => {
+      if (isShuttingDown) return
+      downloadedLength += chunk.length
+      if (!progressBar) return
+
+      const now = Date.now()
+      const startTime = progressBar.startTime || lastUpdateTime
+      if (now - lastUpdateTime > 250 || downloadedLength === totalLength) {
+        const elapsedSeconds = (now - startTime) / 1000
+        const bytesAfterResume = downloadedLength - existingSize
+        const speed = elapsedSeconds > 0 ? bytesAfterResume / elapsedSeconds : 0
+        const bytesRemaining = totalLength - downloadedLength
+        const etaSeconds = (speed > 0 && bytesRemaining > 0) ? bytesRemaining / speed : Infinity
+
+        if (!isShuttingDown) {
+          progressBar.update(downloadedLength, {
+            speed: filesize(speed),
+            eta: etaSeconds === Infinity ? '∞' : prettyMs(etaSeconds * 1000, { compact: true }),
+            value: filesize(downloadedLength)
+          })
+        }
+
+        lastUpdateTime = now
+      }
+    })
+
+    responseStream.pipe(writer)
+
+    return new Promise((resolve, reject) => {
+      writer.on('finish', async () => {
+        if (progressBar) progressBar.stop()
+        try {
+          await new Promise(resolve => setTimeout(resolve, 100))
+          if (fsc.existsSync(lockFilePath)) {
+            fsc.unlinkSync(lockFilePath)
+            untrackLockFile(lockFilePath)
+          }
+
+          try {
+            const finalStats = await fs.stat(filePath)
+            if (finalStats.size !== totalLength && totalLength > 0) {
+              logWarning(`Warning: Final file size (${filesize(finalStats.size)}) doesn't match expected size (${filesize(totalLength)})`)
+              return resolve({
+                recorded: true,
+                resumed: isResuming,
+                warning: `File may be incomplete: size=${filesize(finalStats.size)}, expected=${filesize(totalLength)}`
+              })
+            }
+          } catch (verifyErr) {
+            debug('Error verifying final file size: %O', verifyErr)
+          }
+
+          resolve({ recorded: true, resumed: isResuming })
+        } catch (unlinkErr) {
+          const errMessage = `Could not remove lock file after successful save: ${unlinkErr.message}`
+          logWarning(errMessage)
+          resolve({ recorded: true, resumed: isResuming, warning: errMessage })
+        }
+      })
+
+      writer.on('error', (err) => {
+        if (progressBar) progressBar.stop()
+        logError(`Error writing file ${path.basename(filePath)}: ${err.message}`)
+        debug('File Write Error Details (%s): %O', item.title, err)
+        if (responseStream && !responseStream.destroyed) responseStream.destroy()
+
+        try {
+          if (fsc.existsSync(lockFilePath)) {
+            fsc.unlinkSync(lockFilePath)
+            untrackLockFile(lockFilePath)
+          }
+        } catch (delErr) {
+          logWarning(`Could not delete lock file ${lockFilePath} on write error: ${delErr.message}`)
+        }
+
+        if (!isResuming) {
+          fs.unlink(filePath).catch(delErr =>
+            logWarning(`Could not delete partial file ${filePath} on write error: ${delErr.message}`)
+          )
+        }
+
+        reject(new Error(`Write error: ${err.message}`))
+      })
+
+      responseStream.on('error', (err) => {
+        const completionPercentage = totalLength > 0 ? (downloadedLength / totalLength) * 100 : 0
+        const isFullyComplete = completionPercentage >= 99.9
+        const isNearlyComplete = completionPercentage > 98
+
+        if (progressBar) {
+          if (isFullyComplete) progressBar.update(totalLength)
+          progressBar.stop()
+
+          setTimeout(() => {
+            process.stdout.write('\r\x1b[K')
+
+            if (isFullyComplete) {
+              log(`${item.title} save completed successfully.`)
+            } else if (isNearlyComplete) {
+              logWarning(`Save for ${item.title} interrupted at ${completionPercentage.toFixed(1)}% - File should be usable.`)
+            } else {
+              logError(`Error saving ${item.title}: ${err.message}`)
+              log(chalk.gray(`Partial file kept for future resume - run command again to continue downloading.`))
+            }
+
+            debug('Save Stream Error Details (%s): %O', item.title, err)
+
+            setTimeout(() => {
+              if (writer && !writer.closed) writer.close()
+
+              try {
+                if (fsc.existsSync(lockFilePath)) {
+                  fsc.unlinkSync(lockFilePath)
+                  untrackLockFile(lockFilePath)
+                }
+              } catch (cleanupErr) {
+                logWarning(`Lock file cleanup failed: ${cleanupErr.message}`)
+              }
+
+              if (isFullyComplete) {
+                resolve({ recorded: true, resumed: isResuming })
+              } else if (
+                isNearlyComplete ||
+                err.message.includes('Premature close') ||
+                err.message.includes('IncompleteRead') ||
+                err.code === 'ECONNRESET'
+              ) {
+                const warning = isNearlyComplete
+                  ? `Save interrupted at ${completionPercentage.toFixed(1)}% - file should be usable.`
+                  : 'Save interrupted - can be resumed on next run.'
+                resolve({ recorded: false, resumed: isResuming, warning })
+              } else {
+                resolve({
+                  recorded: false,
+                  resumed: isResuming,
+                  warning: `Download interrupted at ${completionPercentage.toFixed(1)}% - will attempt resume on next run.`
+                })
+              }
+            }, 300)
+          }, 100)
+        } else {
+          debug('Save Stream Error Details (%s): %O', item.title, err)
+          if (writer && !writer.closed) writer.close()
+
+          try {
+            if (fsc.existsSync(lockFilePath)) {
+              fsc.unlinkSync(lockFilePath)
+              untrackLockFile(lockFilePath)
+            }
+          } catch (cleanupErr) {
+            logWarning(`Lock file cleanup failed: ${cleanupErr.message}`)
+          }
+
+          if (isFullyComplete) {
+            resolve({ recorded: true, resumed: isResuming })
+          } else {
+            resolve({
+              recorded: false,
+              resumed: isResuming,
+              warning: 'Save interrupted - can be resumed on next run'
+            })
+          }
+        }
+      })
+    })
+  } catch (error) {
+    if (progressBar) progressBar.stop()
+    if (responseStream && !responseStream.destroyed) responseStream.destroy()
+    if (writer && !writer.closed) writer.close()
+    debug('Outer Save Error (%s): %O', item.title, error)
+
+    try {
+      if (fsc.existsSync(lockFilePath)) {
+        fsc.unlinkSync(lockFilePath)
+        untrackLockFile(lockFilePath)
+      }
+    } catch (cleanupErr) {
+      logWarning(`Could not clean up lock file on error: ${cleanupErr.message}`)
+    }
+
+    logError(`Failed to initiate save for ${item.title}: ${error.message}`)
+    return { recorded: false, error: `Initiation failed: ${error.message}` }
+  }
+}
+
+const printInfo = (fetchServer) => {
+  const table = new Table({ head: [chalk.cyan('Field'), chalk.cyan('Value')] })
+  table.push(
+    { 'Type': fetchServer.deviceType || 'N/A' },
+    { 'Name': fetchServer.friendlyName || 'N/A' },
+    { 'Manufacturer': fetchServer.manufacturer || 'N/A' },
+    { 'Manufacturer URL': fetchServer.manufacturerURL || 'N/A' },
+    { 'Model': fetchServer.modelName || 'N/A' },
+    { 'Model Desc': fetchServer.modelDescription || 'N/A' },
+    { 'Model No': fetchServer.modelNumber || 'N/A' }
+  )
+  log(table.toString())
+}
+
+const printRecordings = (recordings, { jsonOutput, showsOnly }) => {
+  const sortedRecordings = sortRecordingsByTitle(recordings)
+
+  if (jsonOutput) {
+    const output = sortedRecordings.map(rec => {
+      const item = { id: rec.id, title: rec.title }
+      if (!showsOnly) item.items = rec.items?.map(formatItem)
+      return item
+    })
+
+    logHeading('Start JSON Output', 'greenBright')
+    console.log(JSON.stringify(output, null, 2))
+    return logHeading('End JSON Output', 'greenBright')
+  }
+
+  const context = showsOnly ? 'Shows' : 'Recordings'
+  logHeading(`Listing ${context}`)
+
+  if (!sortedRecordings || sortedRecordings.length === 0)
+    return logWarning(`No ${context} found matching criteria!`)
+
+  sortedRecordings.forEach(recording => {
+    const bullet = showsOnly ? '' : '📁 '
+    log(chalk.green(`${bullet}${recording.title}`))
+    if (!recording.items || recording.items.length === 0) {
+      if (!showsOnly) log(chalk.gray('  (No items listed based on current filters)'))
+      return
+    }
+
+    recording.items.forEach(item => {
+      const durationStr = new Date(item.duration * 1000).toISOString().substr(11, 8)
+      const sizeFormatted = filesize(item.size)
+      log(`  ${chalk.whiteBright(item.title)} ${chalk.gray(`${durationStr} ${sizeFormatted}`)}`)
+    })
+  })
+}
+
+const processFilter = (arr) =>
+  _(arr)
+    .castArray()
+    .flatMap(f => typeof f === 'string' ? f.split(',') : [f])
+    .map(s => String(s).trim().toLowerCase())
+    .compact()
+    .value()
 
 const getApiService = async (location) => {
   const device = location?._rawDeviceXml
@@ -676,12 +975,6 @@ const createRequestManager = (options = {}) => {
   return { enqueue }
 }
 
-const httpClient = axios.create({
-  timeout: REQUEST_TIMEOUT,
-  maxContentLength: Infinity,
-  keepAlive: true
-})
-
 const browseRequest = async (apiService, objectId = '0') => {
   const { cd_ctr: controlUrl, cd_service: serviceType } = apiService
 
@@ -762,8 +1055,10 @@ const findDirectories = async (apiService, objectId = '0') => {
   const didlLite = await browseRequest(apiService, objectId)
   if (!didlLite) return null
   if (!didlLite.container) return []
+
   let containers = didlLite.container
   if (!Array.isArray(containers)) containers = [containers]
+
   return containers.map(container => ({
     title: getXmlText(container.title),
     id: getXmlAttr(container, 'id', NO_NUMBER_DEFAULT),
@@ -776,14 +1071,17 @@ const findItems = async (apiService, objectId) => {
   const didlLite = await browseRequest(apiService, objectId)
   if (!didlLite) return []
   if (!didlLite.item) return []
+
   let items = didlLite.item
   if (!Array.isArray(items)) items = [items]
+
   return items.map(item => {
     const resNode = item.res
     const actualRes = Array.isArray(resNode) ? resNode[0] : resNode
     const itemClass = getXmlText(item.class) ?? ''
     const isVideo = itemClass.includes('videoItem')
     const title = getXmlText(item.title)
+
     return {
       type: itemClass,
       title: title,
@@ -853,322 +1151,14 @@ const addSavedFile = async (savePath, savedFilesDb, item) => {
   }
 }
 
-const downloadFile = async (item, filePath, progressBar, overwrite = false) => {
-  const lockFilePath = `${filePath}${CONST_LOCK}`
-  let writer = null
-  let responseStream = null
-  let existingSize = 0
-  let isResuming = false
-  let validResumable = false
-  let totalLength = 0
-
+const isLockFileStale = async (lockFilePath) => {
   try {
-    await fs.mkdir(path.dirname(filePath), { recursive: true })
-
-    try {
-      if (fsc.existsSync(filePath)) {
-        if (overwrite) {
-          console.log(chalk.yellow(`Overwriting: ${item.title}`))
-          fsc.unlinkSync(filePath)
-          isResuming = false
-          existingSize = 0
-        } else {
-          const stats = await fs.stat(filePath)
-          existingSize = stats.size
-          if (existingSize > 0) {
-            try {
-              const fileHandle = await fs.open(filePath, 'r')
-              const buffer = Buffer.alloc(Math.min(8192, existingSize))
-              await fileHandle.read(buffer, 0, buffer.length, Math.max(0, existingSize - buffer.length))
-              await fileHandle.close()
-
-              isResuming = true
-              validResumable = true
-            } catch (validErr) {
-              debug('Error validating file for resumption: %O', validErr)
-              isResuming = false
-              existingSize = 0
-            }
-          }
-        }
-      }
-    } catch (statErr) {
-      debug('Error checking file stats for resume: %O', statErr)
-      existingSize = 0
-      isResuming = false
-    }
-
-    try {
-      if (fsc.existsSync(lockFilePath)) {
-        fsc.unlinkSync(lockFilePath)
-        debug('Removed existing lock file: %s', lockFilePath)
-      }
-    } catch (lockErr) {
-      debug('Error removing existing lock file: %O', lockErr)
-    }
-
-    fsc.writeFileSync(lockFilePath, '')
-    trackLockFile(lockFilePath)
-
-    if (isResuming && validResumable) {
-      console.log(chalk.cyan(`Resuming download for ${item.title} from ${filesize(existingSize)}`))
-    } else if (isResuming && !validResumable) {
-      console.log(chalk.yellow(`Cannot resume potentially corrupted file for ${item.title}, restarting download`))
-      isResuming = false
-      existingSize = 0
-    }
-
-    const headers = {}
-    if (isResuming && existingSize > 0) {
-      headers.Range = `bytes=${existingSize}-`
-    }
-
-    const response = await httpClient.get(item.url, {
-      responseType: 'stream',
-      timeout: REQUEST_TIMEOUT * 20,
-      headers
-    })
-
-    responseStream = response.data
-    totalLength = isResuming
-      ? parseInt(response.headers['content-length'] || '0', 10) + existingSize
-      : parseInt(response.headers['content-length'] || '0', 10)
-
-    debug('Download Headers for %s: %O', item.title, response.headers)
-    debug('Resume Status: %s, existing size: %d, response status: %d',
-          isResuming ? 'yes' : 'no', existingSize, response.status)
-
-    if (totalLength === MAX_OCTET_RECORDING) {
-      logWarning(`Skipping ${item.title}, it appears to be currently recording.`)
-      responseStream.destroy()
-
-      try {
-        fsc.unlinkSync(lockFilePath)
-        untrackLockFile(lockFilePath)
-      } catch (delErr) {
-        logWarning(`Could not delete lock file on skip ${lockFilePath}: ${delErr.message}`)
-      }
-
-      if (progressBar) progressBar.stop()
-      return { recorded: false, warning: "Skipping item, it's currently recording" }
-    }
-
-    if (totalLength === 0 && !isResuming) {
-      logWarning(`Skipping ${item.title}, content length is zero.`)
-      responseStream.destroy()
-
-      try {
-        fsc.unlinkSync(lockFilePath)
-        untrackLockFile(lockFilePath)
-      } catch (delErr) {
-        logWarning(`Could not delete lock file on zero size ${lockFilePath}: ${delErr.message}`)
-      }
-
-      if (progressBar) progressBar.stop()
-      return { recorded: false, warning: 'Skipping item, content length is zero' }
-    }
-
-    if (isResuming) {
-      writer = fsc.createWriteStream(filePath, { flags: 'a' })
-    } else {
-      writer = fsc.createWriteStream(filePath)
-    }
-
-    if (progressBar) {
-      progressBar.setTotal(totalLength)
-      progressBar.update(existingSize, {
-        speed: 'N/A',
-        eta: 'N/A',
-        value: filesize(existingSize),
-        total: filesize(totalLength)
-      })
-    }
-
-    let downloadedLength = existingSize
-    let lastUpdateTime = progressBar?.startTime || Date.now()
-
-    responseStream.on('data', (chunk) => {
-      if (isShuttingDown) return
-      downloadedLength += chunk.length
-      if (progressBar) {
-        const now = Date.now()
-        const startTime = progressBar.startTime || lastUpdateTime
-        if (now - lastUpdateTime > 250 || downloadedLength === totalLength) {
-          const elapsedSeconds = (now - startTime) / 1000
-          const bytesAfterResume = downloadedLength - existingSize
-          const speed = elapsedSeconds > 0 ? bytesAfterResume / elapsedSeconds : 0
-          const bytesRemaining = totalLength - downloadedLength
-          const etaSeconds = (speed > 0 && bytesRemaining > 0) ? bytesRemaining / speed : Infinity
-          if (!isShuttingDown) {
-            progressBar.update(downloadedLength, {
-              speed: filesize(speed),
-              eta: etaSeconds === Infinity ? '∞' : prettyMs(etaSeconds * 1000, { compact: true }),
-              value: filesize(downloadedLength)
-            })
-          }
-          lastUpdateTime = now
-        }
-      }
-    })
-
-    responseStream.pipe(writer)
-
-    return new Promise((resolve, reject) => {
-      writer.on('finish', async () => {
-        if (progressBar) progressBar.stop()
-        try {
-          await new Promise(resolve => setTimeout(resolve, 100))
-          if (fsc.existsSync(lockFilePath)) {
-            fsc.unlinkSync(lockFilePath)
-            untrackLockFile(lockFilePath)
-          }
-
-          try {
-            const finalStats = await fs.stat(filePath)
-            if (finalStats.size !== totalLength && totalLength > 0) {
-              logWarning(`Warning: Final file size (${filesize(finalStats.size)}) doesn't match expected size (${filesize(totalLength)})`)
-              return resolve({
-                recorded: true,
-                resumed: isResuming,
-                warning: `File may be incomplete: size=${filesize(finalStats.size)}, expected=${filesize(totalLength)}`
-              })
-            }
-          } catch (verifyErr) {
-            debug('Error verifying final file size: %O', verifyErr)
-          }
-
-          resolve({ recorded: true, resumed: isResuming })
-        } catch (unlinkErr) {
-          const errMessage = `Could not remove lock file after successful save: ${unlinkErr.message}`
-          logWarning(errMessage)
-          resolve({ recorded: true, resumed: isResuming, warning: errMessage })
-        }
-      })
-
-      writer.on('error', (err) => {
-        if (progressBar) progressBar.stop()
-        logError(`Error writing file ${path.basename(filePath)}: ${err.message}`)
-        debug('File Write Error Details (%s): %O', item.title, err)
-        if (responseStream && !responseStream.destroyed) responseStream.destroy()
-
-        try {
-          if (fsc.existsSync(lockFilePath)) {
-            fsc.unlinkSync(lockFilePath)
-            untrackLockFile(lockFilePath)
-          }
-        } catch (delErr) {
-          logWarning(`Could not delete lock file ${lockFilePath} on write error: ${delErr.message}`)
-        }
-
-        if (!isResuming) {
-          fs.unlink(filePath).catch(delErr =>
-            logWarning(`Could not delete partial file ${filePath} on write error: ${delErr.message}`)
-          )
-        }
-
-        reject(new Error(`Write error: ${err.message}`))
-      })
-
-      responseStream.on('error', (err) => {
-        const completionPercentage = totalLength > 0 ? (downloadedLength / totalLength) * 100 : 0
-        const isFullyComplete = completionPercentage >= 99.9
-        const isNearlyComplete = completionPercentage > 98
-
-        if (progressBar) {
-          if (isFullyComplete) progressBar.update(totalLength)
-
-          progressBar.stop()
-
-          setTimeout(() => {
-            process.stdout.write('\r\x1b[K')
-
-            if (isFullyComplete) {
-              log(`${item.title} save completed successfully.`)
-            } else if (isNearlyComplete) {
-              logWarning(`Save for ${item.title} interrupted at ${completionPercentage.toFixed(1)}% - File should be usable.`)
-            } else {
-              logError(`Error saving ${item.title}: ${err.message}`)
-              log(chalk.gray(`Partial file kept for future resume - run command again to continue downloading.`))
-            }
-
-            debug('Save Stream Error Details (%s): %O', item.title, err)
-
-            setTimeout(() => {
-              if (writer && !writer.closed) writer.close()
-
-              try {
-                if (fsc.existsSync(lockFilePath)) {
-                  fsc.unlinkSync(lockFilePath)
-                  untrackLockFile(lockFilePath)
-                }
-              } catch (cleanupErr) {
-                logWarning(`Lock file cleanup failed: ${cleanupErr.message}`)
-              }
-
-              if (isFullyComplete) {
-                resolve({ recorded: true, resumed: isResuming })
-              } else if (
-                isNearlyComplete ||
-                err.message.includes('Premature close') ||
-                err.message.includes('IncompleteRead') ||
-                err.code === 'ECONNRESET'
-              ) {
-                const warning = isNearlyComplete
-                  ? `Save interrupted at ${completionPercentage.toFixed(1)}% - file should be usable.`
-                  : 'Save interrupted - can be resumed on next run.'
-                resolve({ recorded: false, resumed: isResuming, warning })
-              } else {
-                resolve({
-                  recorded: false,
-                  resumed: isResuming,
-                  warning: `Download interrupted at ${completionPercentage.toFixed(1)}% - will attempt resume on next run.`
-                })
-              }
-            }, 300)
-          }, 100)
-        } else {
-          debug('Save Stream Error Details (%s): %O', item.title, err)
-          if (writer && !writer.closed) writer.close()
-
-          try {
-            if (fsc.existsSync(lockFilePath)) {
-              fsc.unlinkSync(lockFilePath)
-              untrackLockFile(lockFilePath)
-            }
-          } catch (cleanupErr) {
-            logWarning(`Lock file cleanup failed: ${cleanupErr.message}`)
-          }
-
-          if (isFullyComplete) {
-            resolve({ recorded: true, resumed: isResuming })
-          } else {
-            resolve({
-              recorded: false,
-              resumed: isResuming,
-              warning: 'Save interrupted - can be resumed on next run'
-            })
-          }
-        }
-      })
-    })
-
-  } catch (error) {
-    if (progressBar) progressBar.stop()
-    if (responseStream && !responseStream.destroyed) responseStream.destroy()
-    if (writer && !writer.closed) writer.close()
-    debug('Outer Save Error (%s): %O', item.title, error)
-
-    try {
-      if (fsc.existsSync(lockFilePath)) {
-        fsc.unlinkSync(lockFilePath)
-        untrackLockFile(lockFilePath)
-      }
-    } catch (cleanupErr) {
-      logWarning(`Could not clean up lock file on error: ${cleanupErr.message}`)
-    }
-
-    logError(`Failed to initiate save for ${item.title}: ${error.message}`)
-    return { recorded: false, error: `Initiation failed: ${error.message}` }
+    const stats = await fs.stat(lockFilePath)
+    const lockAge = Date.now() - stats.mtimeMs
+    return lockAge > 600000
+  } catch (err) {
+    debug('Error checking lock file stats: %O', err)
+    return true
   }
 }
 
@@ -1191,6 +1181,7 @@ const parseLocations = async (locationsUrls) => {
       debugXml('Parsed XML from %s: %O', url, xmlRoot)
       const device = xmlRoot?.root?.device
       if (!device) return logWarning(`Could not find device info in XML from ${url}`)
+
       return {
         url: url,
         deviceType: getXmlText(device.deviceType),
@@ -1253,6 +1244,15 @@ const sortRecordingsByTitle = (recordings) => {
     .value()
 }
 
+const formatItem = (item) => ({
+  id: item.id,
+  title: item.title,
+  type: item.item_type,
+  duration: item.duration,
+  size: item.size,
+  description: item.description
+})
+
 const getXmlAttr = (node, attrName, defaultValue = '') =>
   node?.[`@_${attrName}`] ?? defaultValue
 
@@ -1297,15 +1297,6 @@ const tsToSeconds = (ts = '0') => {
     return 0
   }
 }
-
-const formatItem = (item) => ({
-  id: item.id,
-  title: item.title,
-  type: item.item_type,
-  duration: item.duration,
-  size: item.size,
-  description: item.description
-})
 
 const log = message => {
   if (progressBarActive) process.stdout.write('\r\n')
