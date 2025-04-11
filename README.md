@@ -3,7 +3,7 @@
 [![NPM Version](https://img.shields.io/npm/v/fetchtv)](https://www.npmjs.com/package/fetchtv)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-A Node.js CLI tool to manage Fetch TV recordings.
+A Node.js CLI tool to download Fetch TV recordings.
 
 Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Python) which is based on [`jinxo13/FetchTV-Helpers`](https://github.com/jinxo13/FetchTV-Helpers) (also Python).
 
@@ -11,11 +11,9 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 
 - [Demo](#demo)
 - [Quick Start](#quick-start)
-- [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Examples](#examples)
-- [Notes](#notes)
 - [Disclaimer](#disclaimer)
 - [Support](#support)
 
@@ -28,15 +26,6 @@ https://gist.github.com/user-attachments/assets/2daaac03-9cf8-48d9-af25-60182b23
 - [Install](#installation) `fetchtv`
 - [Run](#usage) `fetchtv`
 
-## Features
-
-- Discover Fetch TV servers on your network
-- View basic Fetch TV server information
-- List recorded shows and episodes
-- Filter recordings by show and episode title
-- Save recordings to a specified directory
-- Output information in human-readable format or JSON
-
 ## Installation
 
 - [NPX](#installation-npx) (Easiest)
@@ -48,9 +37,9 @@ https://gist.github.com/user-attachments/assets/2daaac03-9cf8-48d9-af25-60182b23
 > [!NOTE]<br>
 > NPX requires [Node.js](https://nodejs.org/en/download) installed and running on your system (suggestion: use [Volta](https://volta.sh)).
 
-The easiest way to run `fetchtv` is using NPX.
+The easiest way to install `fetchtv` is via NPX.
 
-First, ensure Node.js is installed:
+First, ensure Node.js is running:
 
 ```console
 node --version # Ideally >= v22.x but fetchtv is >= v18.x compatible
@@ -59,16 +48,14 @@ node --version # Ideally >= v22.x but fetchtv is >= v18.x compatible
 Then, run `fetchtv` via NPX:
 
 ```console
-# Supplying the "-y" flag to skip prompts
-npx -y fetchtv
+npx fetchtv             # Run the tool
+npx fetchtv@latest      # (optional) "@latest" ensures package is up-to-date
+npx -y fetchtv@latest   # (optional) "-y" flag skips any prompts
 
-# Using "@latest" to keep the package up-to-date
-npx -y fetchtv@latest
+npx fetchtv info
+npx fetchtv shows
+npx fetchtv recordings
 
-# Running the tool with various commands
-npx -y fetchtv@latest info
-npx -y fetchtv@latest recordings
-npx -y fetchtv@latest shows
 # etc…
 ```
 
@@ -87,7 +74,7 @@ npx -y fetchtv@latest shows
     ```console
     cd /path/to/fetchtv
     ```
-1. Ensure Node.js is installed:<br>
+1. Ensure Node.js is running:<br>
     ```console
     node --version # Ideally >= v22.x but fetchtv is >= v18.x compatible
     ```
@@ -95,12 +82,13 @@ npx -y fetchtv@latest shows
     ```console
     npm ci
     ```
-1. Run the tool:<br>
+1. Run `fetchtv`:<br>
     ```console
     node fetchtv.js
     node fetchtv.js info
     node fetchtv.js recordings
     node fetchtv.js shows
+
     # etc…
     ```
 
@@ -112,8 +100,16 @@ You may optionally link the `fetchtv` tool to your system path for easier access
 npm link
 ```
 
-This will create a symlink to the `fetchtv` command in your global `node_modules` directory, allowing you to run it from anywhere in your terminal.
+This will create a symlink to the `fetchtv` command in your global `node_modules` directory, allowing you to run it from anywhere in your terminal:
 
+```console
+fetchtv
+fetchtv info
+fetchtv shows
+fetchtv recordings
+
+# etc…
+```
 
 To uninstall the linked tool, run:
 
@@ -134,7 +130,7 @@ npm unlink
     ```console
     cd /path/to/fetchtv
     ```
-1. Ensure Docker is installed:<br>
+1. Ensure Docker is running:<br>
     ```console
     docker --version # Ideally >= v27.x
     ```
@@ -146,19 +142,25 @@ npm unlink
     ```console
     docker run -t --rm fetchtv
     docker run -t --rm fetchtv info
-    docker run -t --rm fetchtv recordings
     docker run -t --rm fetchtv shows
+    docker run -t --rm fetchtv recordings
+
     # etc…
     ```
 
-#### UPnP/SSDP Discovery in Docker
+#### UPnP/SSDP Discovery Issues
 
-UPnP/SSDP discovery often doesn't work properly in Docker containers due to network isolation.
+UPnP/SSDP discovery can be unreliable in Docker containers.
 
 To work around this, it's recommended to specify your Fetch TV server's IP address directly with the `--ip` (and optionally `--port`) option when running the container. For example:
 
 ```console
-docker run -t --rm fetchtv --ip=192.168.86.71
+docker run -t --rm fetchtv
+docker run -t --rm fetchtv info --ip=192.168.86.71
+docker run -t --rm fetchtv shows --ip=192.168.86.71
+docker run -t --rm fetchtv recordings --ip=192.168.86.71
+
+# etc…
 ```
 
 ## Usage
@@ -166,7 +168,7 @@ docker run -t --rm fetchtv --ip=192.168.86.71
 If you [installed via NPX](#installation-npx), you can run it from anywhere:
 
 ```command
-npx -y fetchtv <COMMAND> [OPTIONS]
+npx fetchtv <COMMAND> [OPTIONS]
 ```
 
 If you [installed from Node.js source](#installation-nodejs-from-source), you can run it from the cloned repo directory:
@@ -219,64 +221,56 @@ fetchtv info
 List recorded show titles:
 
 ```command
-fetchtv shows --ip 192.168.86.71
+fetchtv shows --ip=192.168.86.71
 ```
 
 List recordings:
 
 ```command
-fetchtv recordings --ip 192.168.86.71
+fetchtv recordings --ip=192.168.86.71
 ```
 
 List recordings and output as JSON:
 
 ```command
-fetchtv recordings --ip 192.168.86.71 --json
+fetchtv recordings --ip=192.168.86.71 --json
 ```
 
 Save new recordings to `./downloads` (creates directory if needed):
 
 ```command
-fetchtv recordings --ip 192.168.86.71 --save=./downloads
+fetchtv recordings --ip=192.168.86.71 --save=./downloads
 ```
 
 Save new recordings but exclude show titles containing `News`:
 
 ```command
-fetchtv recordings --ip 192.168.86.71 --exclude=News --save=./downloads
+fetchtv recordings --ip=192.168.86.71 --exclude=News --save=./downloads
 ```
 
 Save new episodes for the show `MasterChef`:
 
 ```command
-fetchtv recordings --ip 192.168.86.71 --show=MasterChef --save=./downloads
+fetchtv recordings --ip=192.168.86.71 --show=MasterChef --save=./downloads
 ```
 
 Save & overwrite specific `MasterChef` episodes containing `S04E12` or `S04E13`:
 
 ```command
-fetchtv recordings --ip 192.168.86.71 --show=MasterChef --title=S04E12 --title=S04E13 --save=./downloads --overwrite
+fetchtv recordings --ip=192.168.86.71 --show=MasterChef --title=S04E12 --title=S04E13 --save=./downloads --overwrite
 ```
 
 List only items currently being recorded:
 
 ```command
-fetchtv recordings --ip 192.168.86.71 --is-recording
+fetchtv recordings --ip=192.168.86.71 --is-recording
 ```
 
 Save only items currently being recorded:
 
 ```command
-fetchtv recordings --ip 192.168.86.71 --is-recording --save=./in-progress
+fetchtv recordings --ip=192.168.86.71 --is-recording --save=./in-progress
 ```
-
-## Notes
-
-- The tool relies on your Fetch TV server's UPnP/DLNA service being discoverable on your network.
-- Firewalls on your computer might block SSDP discovery packets.
-- This tool may list recordings marked for deletion on the Fetch box, as the DLNA service doesn't seem to expose this status.
-- Saved files might sometimes report as incomplete due to how Fetch TV handles streaming (files may still be usable—check file sizes if concerned).
-- The Fetch TV UPnP service can sometimes be unstable and drop connections. This tool implements retries and delays to mitigate this, but occasional warnings about failed first attempts may appear in the console.
 
 ## Disclaimer
 
