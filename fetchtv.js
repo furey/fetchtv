@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import os from 'os'
 import fsc from 'fs'
 import _ from 'lodash'
 import path from 'path'
@@ -39,12 +40,12 @@ const BROWSE_INTER_DELAY = 150
 const BROWSE_RETRY_DELAY = 1500
 const MAX_CONCURRENT_BROWSE = 5
 const ADAPTIVE_DELAY_FACTOR = 1.5
-const MAX_CONCURRENT_DOWNLOADS = 3
 const ISRECORDING_CHECK_DELAY = 200
 const INITIAL_BROWSE_CONCURRENCY = 3
 const SAVE_FILE_NAME = 'fetchtv.json'
 const MAX_OCTET_RECORDING = 4398046510080
 const FETCH_MANUFACTURER_URL = 'http://www.fetch.com/'
+const MAX_CONCURRENT_DOWNLOADS = Math.min(os.cpus().length, 10)
 const UPNP_CONTENT_DIRECTORY_URN = 'urn:schemas-upnp-org:service:ContentDirectory:1'
 
 const REQUEST_QUEUE_PRIORITY = {
@@ -211,7 +212,6 @@ const handleSaveAction = async (recordings, { savePath, overwrite, jsonOutput })
         throw statError
       }
     }
-
     const jsonResult = await saveRecordings(recordings, { savePath, overwrite })
     if (jsonOutput) {
       logHeading('Start JSON Output', 'greenBright')
@@ -239,6 +239,13 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
         const showDirPath = path.join(savePath, showDirName)
         const itemFileName = `${createValidFilename(item.title)}.mpeg`
         const filePath = path.join(showDirPath, itemFileName)
+        const lockFilePath = `${filePath}${CONST_LOCK}`
+        const lockExists = fsc.existsSync(lockFilePath)
+        if (lockExists) {
+          log(chalk.gray(`Already writing ${item.title} (lock file exists), skipping.`))
+          if (argv.json) jsonResults.push({ item: formatItem(item), recorded: false, warning: 'Already writing (lock file exists) skipping' })
+          continue
+        }
         tasks.push({ item, filePath, showDirPath, showTitle: show.title })
       } else {
         log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
@@ -739,12 +746,6 @@ const downloadFile = async (item, filePath, progressBar) => {
   let responseStream = null
 
   try {
-    if (fsc.existsSync(lockFilePath)) {
-      logWarning(`Already writing ${item.title} (lock file exists), skipping.`)
-      if (progressBar) progressBar.stop()
-      return { recorded: false, warning: 'Already writing (lock file exists) skipping' }
-    }
-
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     await fs.writeFile(lockFilePath, '')
 
