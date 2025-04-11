@@ -27,6 +27,7 @@ const debugNetwork = debugLib('fetchtv:network')
 let argv = {}
 let progressBarActive = false
 const requestCache = new Map()
+const activeLockFiles = new Set()
 
 const BROWSE_RETRIES = 3
 const MAX_FILENAME = 255
@@ -56,6 +57,8 @@ const REQUEST_QUEUE_PRIORITY = {
 }
 
 const main = async () => {
+  registerExitHandlers()
+
   argv = await yargs(hideBin(process.argv))
     .middleware((argv) => {
       const command = argv._[0]
@@ -230,26 +233,82 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
   const jsonResults = []
   const tasks = []
 
+  // First pass: check and remove any existing lock files
   for (const show of recordings) {
     if (!show.items || show.items.length === 0) continue
 
     for (const item of show.items) {
-      if (overwrite || !savedFilesDb[item.id]) {
-        const showDirName = createValidFilename(show.title)
-        const showDirPath = path.join(savePath, showDirName)
-        const itemFileName = `${createValidFilename(item.title)}.mpeg`
-        const filePath = path.join(showDirPath, itemFileName)
-        const lockFilePath = `${filePath}${CONST_LOCK}`
-        const lockExists = fsc.existsSync(lockFilePath)
-        if (lockExists) {
-          log(chalk.gray(`Already writing ${item.title} (lock file exists), skipping.`))
-          if (argv.json) jsonResults.push({ item: formatItem(item), recorded: false, warning: 'Already writing (lock file exists) skipping' })
-          continue
+      const showDirName = createValidFilename(show.title)
+      const showDirPath = path.join(savePath, showDirName)
+      const itemFileName = `${createValidFilename(item.title)}.mpeg`
+      const filePath = path.join(showDirPath, itemFileName)
+      const lockFilePath = `${filePath}${CONST_LOCK}`
+
+      if (fsc.existsSync(lockFilePath)) {
+        const isStale = await isLockFileStale(lockFilePath)
+        if (isStale) {
+          log(chalk.yellow(`Removing stale lock file for ${item.title}`))
+          try {
+            fsc.unlinkSync(lockFilePath)
+            debug('Removed stale lock file: %s', lockFilePath)
+          } catch (err) {
+            debug('Error removing stale lock file: %O', err)
+          }
         }
-        tasks.push({ item, filePath, showDirPath, showTitle: show.title })
-      } else {
+      }
+    }
+  }
+
+  // Second pass: prepare downloads
+  for (const show of recordings) {
+    if (!show.items || show.items.length === 0) continue
+
+    for (const item of show.items) {
+      const showDirName = createValidFilename(show.title)
+      const showDirPath = path.join(savePath, showDirName)
+      const itemFileName = `${createValidFilename(item.title)}.mpeg`
+      const filePath = path.join(showDirPath, itemFileName)
+      const lockFilePath = `${filePath}${CONST_LOCK}`
+      const lockExists = fsc.existsSync(lockFilePath)
+
+      // Check if file exists and is completed
+      const isCompletedFile = savedFilesDb[item.id] && !overwrite
+
+      // Check for partial file
+      let hasPartialFile = false
+      try {
+        if (fsc.existsSync(filePath) && !isCompletedFile) {
+          const stats = await fs.stat(filePath)
+          hasPartialFile = stats.size > 0 && stats.size < item.size
+        }
+      } catch (err) {
+        debug('Error checking for partial file %s: %O', filePath, err)
+      }
+
+      if (lockExists) {
+        log(chalk.gray(`Already writing ${item.title} (lock file exists), skipping.`))
+        if (argv.json) jsonResults.push({
+          item: formatItem(item),
+          recorded: false,
+          warning: 'Already writing (lock file exists) skipping'
+        })
+        continue
+      }
+
+      if (isCompletedFile && !hasPartialFile) {
         log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
-        if (argv.json) jsonResults.push({ item: formatItem(item), recorded: false, warning: 'Skipped (already saved)' })
+        if (argv.json) jsonResults.push({
+          item: formatItem(item),
+          recorded: false,
+          warning: 'Skipped (already saved)'
+        })
+        continue
+      }
+
+      tasks.push({ item, filePath, showDirPath, showTitle: show.title })
+
+      if (hasPartialFile) {
+        log(chalk.cyan(`Found partial download for ${show.title} / ${item.title} - will resume`))
       }
     }
   }
@@ -285,15 +344,38 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
 
     const promise = downloadFile(task.item, task.filePath, progressBar)
       .then(async (downloadResult) => {
-        const resultEntry = { item: formatItem(task.item), recorded: downloadResult.recorded }
+        const resultEntry = {
+          item: formatItem(task.item),
+          recorded: downloadResult.recorded,
+          resumed: downloadResult.resumed || false
+        }
+
         if (downloadResult.warning) resultEntry.warning = downloadResult.warning
         if (downloadResult.error) resultEntry.error = downloadResult.error
         jsonResults.push(resultEntry)
+
+        // Only add to saved files db if fully recorded
         if (downloadResult.recorded) await addSavedFile(savePath, savedFilesDb, task.item)
       })
       .catch((error) => {
         logError(`Unexpected error processing save result for ${task.item.title}: ${error.message}`)
-        jsonResults.push({ item: formatItem(task.item), recorded: false, error: `Processing error: ${error.message}` })
+        jsonResults.push({
+          item: formatItem(task.item),
+          recorded: false,
+          error: `Processing error: ${error.message}`
+        })
+
+        // Clean up lock file on error
+        try {
+          const lockFilePath = `${task.filePath}${CONST_LOCK}`
+          if (fsc.existsSync(lockFilePath)) {
+            fsc.unlinkSync(lockFilePath)
+            untrackLockFile(lockFilePath)
+          }
+        } catch (cleanupErr) {
+          debug('Error cleaning lock file after promise error: %O', cleanupErr)
+        }
+
         if (progressBar) progressBar.stop()
       })
       .finally(() => {
@@ -303,12 +385,28 @@ const saveRecordings = async (recordings, { savePath, overwrite }) => {
     activePromises.add(promise)
   }
 
-  await Promise.allSettled(activePromises)
+  // Setup signal handlers for lock file cleanup
+  registerExitHandlers()
 
-  multiBar.stop()
-  progressBarActive = false
+  try {
+    await Promise.allSettled(activePromises)
+  } finally {
+    multiBar.stop()
+    progressBarActive = false
+  }
 
   return jsonResults
+}
+
+const isLockFileStale = async (lockFilePath) => {
+  try {
+    const stats = await fs.stat(lockFilePath)
+    const lockAge = Date.now() - stats.mtimeMs
+    return lockAge > 600000 // 10 minutes in milliseconds
+  } catch (err) {
+    debug('Error checking lock file stats: %O', err)
+    return true // If we can't check, assume it's stale
+  }
 }
 
 const discoverFetch = async ({ ip, port }) => {
@@ -744,49 +842,115 @@ const downloadFile = async (item, filePath, progressBar) => {
   const lockFilePath = `${filePath}${CONST_LOCK}`
   let writer = null
   let responseStream = null
+  let existingSize = 0
+  let isResuming = false
+  let totalLength = 0
 
   try {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await fs.writeFile(lockFilePath, '')
+
+    // Check if we're resuming a download
+    try {
+      if (fsc.existsSync(filePath)) {
+        const stats = await fs.stat(filePath)
+        existingSize = stats.size
+
+        if (existingSize > 0) {
+          isResuming = true
+          log(chalk.cyan(`Resuming download for ${item.title} from ${filesize(existingSize)}`))
+        }
+      }
+    } catch (statErr) {
+      debug('Error checking file stats for resume: %O', statErr)
+      existingSize = 0
+      isResuming = false
+    }
+
+    // Always clean existing lock files before starting
+    try {
+      if (fsc.existsSync(lockFilePath)) {
+        fsc.unlinkSync(lockFilePath)
+        debug('Removed existing lock file: %s', lockFilePath)
+      }
+    } catch (lockErr) {
+      debug('Error removing existing lock file: %O', lockErr)
+    }
+
+    // Create new lock file
+    fsc.writeFileSync(lockFilePath, '')
+    trackLockFile(lockFilePath)
+
+    // Prepare headers for resume if needed
+    const headers = {}
+    if (isResuming && existingSize > 0) {
+      headers.Range = `bytes=${existingSize}-`
+    }
 
     const response = await axios.get(item.url, {
       responseType: 'stream',
-      timeout: REQUEST_TIMEOUT * 20
+      timeout: REQUEST_TIMEOUT * 20,
+      headers
     })
 
     responseStream = response.data
-    const totalLength = parseInt(response.headers['content-length'] ?? '0', 10)
-    debug('Save Headers for %s: %O', item.title, response.headers)
+    totalLength = isResuming
+      ? parseInt(response.headers['content-length'] || '0', 10) + existingSize
+      : parseInt(response.headers['content-length'] || '0', 10)
 
+    debug('Download Headers for %s: %O', item.title, response.headers)
+    debug('Resume status: %s, existing size: %d, response status: %d',
+          isResuming ? 'yes' : 'no', existingSize, response.status)
+
+    // Handle special cases
     if (totalLength === MAX_OCTET_RECORDING) {
       logWarning(`Skipping ${item.title}, it appears to be currently recording.`)
       responseStream.destroy()
-      await fs.unlink(lockFilePath).catch(delErr => logWarning(`Could not delete lock file on skip ${lockFilePath}: ${delErr.message}`))
+
+      try {
+        fsc.unlinkSync(lockFilePath)
+        untrackLockFile(lockFilePath)
+      } catch (delErr) {
+        logWarning(`Could not delete lock file on skip ${lockFilePath}: ${delErr.message}`)
+      }
+
       if (progressBar) progressBar.stop()
       return { recorded: false, warning: "Skipping item, it's currently recording" }
     }
 
-    if (totalLength === 0) {
+    if (totalLength === 0 && !isResuming) {
       logWarning(`Skipping ${item.title}, content length is zero.`)
       responseStream.destroy()
-      await fs.unlink(lockFilePath).catch(delErr => logWarning(`Could not delete lock file on zero size ${lockFilePath}: ${delErr.message}`))
+
+      try {
+        fsc.unlinkSync(lockFilePath)
+        untrackLockFile(lockFilePath)
+      } catch (delErr) {
+        logWarning(`Could not delete lock file on zero size ${lockFilePath}: ${delErr.message}`)
+      }
+
       if (progressBar) progressBar.stop()
       return { recorded: false, warning: 'Skipping item, content length is zero' }
     }
 
-    writer = fsc.createWriteStream(filePath)
+    // Handle file modes for writing
+    if (isResuming) {
+      writer = fsc.createWriteStream(filePath, { flags: 'a' }) // Append mode
+    } else {
+      writer = fsc.createWriteStream(filePath)
+    }
 
+    // Configure progress bar
     if (progressBar) {
       progressBar.setTotal(totalLength)
-      progressBar.update(0, {
+      progressBar.update(existingSize, {
         speed: 'N/A',
         eta: 'N/A',
-        value: filesize(0),
+        value: filesize(existingSize),
         total: filesize(totalLength)
       })
     }
 
-    let downloadedLength = 0
+    let downloadedLength = existingSize
     let lastUpdateTime = progressBar?.startTime || Date.now()
 
     responseStream.on('data', (chunk) => {
@@ -796,7 +960,8 @@ const downloadFile = async (item, filePath, progressBar) => {
         const startTime = progressBar.startTime || lastUpdateTime
         if (now - lastUpdateTime > 250 || downloadedLength === totalLength) {
           const elapsedSeconds = (now - startTime) / 1000
-          const speed = elapsedSeconds > 0 ? downloadedLength / elapsedSeconds : 0
+          const bytesAfterResume = downloadedLength - existingSize
+          const speed = elapsedSeconds > 0 ? bytesAfterResume / elapsedSeconds : 0
           const bytesRemaining = totalLength - downloadedLength
           const etaSeconds = (speed > 0 && bytesRemaining > 0) ? bytesRemaining / speed : Infinity
 
@@ -818,12 +983,31 @@ const downloadFile = async (item, filePath, progressBar) => {
         if (progressBar) progressBar.stop()
         try {
           await new Promise(resolve => setTimeout(resolve, 100))
-          if (fsc.existsSync(lockFilePath)) await fs.unlink(lockFilePath)
-          resolve({ recorded: true })
+          if (fsc.existsSync(lockFilePath)) {
+            fsc.unlinkSync(lockFilePath)
+            untrackLockFile(lockFilePath)
+          }
+
+          // Verify the file size matches expected total after download
+          try {
+            const finalStats = await fs.stat(filePath)
+            if (finalStats.size !== totalLength && totalLength > 0) {
+              logWarning(`Warning: Final file size (${filesize(finalStats.size)}) doesn't match expected size (${filesize(totalLength)})`)
+              return resolve({
+                recorded: true,
+                resumed: isResuming,
+                warning: `File may be incomplete: size=${filesize(finalStats.size)}, expected=${filesize(totalLength)}`
+              })
+            }
+          } catch (verifyErr) {
+            debug('Error verifying final file size: %O', verifyErr)
+          }
+
+          resolve({ recorded: true, resumed: isResuming })
         } catch (unlinkErr) {
           const errMessage = `Could not remove lock file after successful save: ${unlinkErr.message}`
           logWarning(errMessage)
-          resolve({ recorded: true, warning: errMessage })
+          resolve({ recorded: true, resumed: isResuming, warning: errMessage })
         }
       })
 
@@ -832,8 +1016,23 @@ const downloadFile = async (item, filePath, progressBar) => {
         logError(`Error writing file ${path.basename(filePath)}: ${err.message}`)
         debug('File Write Error Details (%s): %O', item.title, err)
         if (responseStream && !responseStream.destroyed) responseStream.destroy()
-        fs.unlink(lockFilePath).catch(delErr => logWarning(`Could not delete lock file ${lockFilePath} on write error: ${delErr.message}`))
-        fs.unlink(filePath).catch(delErr => logWarning(`Could not delete partial file ${filePath} on write error: ${delErr.message}`))
+
+        try {
+          if (fsc.existsSync(lockFilePath)) {
+            fsc.unlinkSync(lockFilePath)
+            untrackLockFile(lockFilePath)
+          }
+        } catch (delErr) {
+          logWarning(`Could not delete lock file ${lockFilePath} on write error: ${delErr.message}`)
+        }
+
+        // Don't delete the partial file if we were resuming
+        if (!isResuming) {
+          fs.unlink(filePath).catch(delErr =>
+            logWarning(`Could not delete partial file ${filePath} on write error: ${delErr.message}`)
+          )
+        }
+
         reject(new Error(`Write error: ${err.message}`))
       })
 
@@ -856,6 +1055,7 @@ const downloadFile = async (item, filePath, progressBar) => {
               logWarning(`Save for ${item.title} interrupted at ${completionPercentage.toFixed(1)}% - File should be usable`)
             } else {
               logError(`Error saving ${item.title}: ${err.message}`)
+              log(chalk.gray(`Partial file kept for future resume - run command again to continue downloading`))
             }
 
             debug('Save Stream Error Details (%s): %O', item.title, err)
@@ -863,22 +1063,18 @@ const downloadFile = async (item, filePath, progressBar) => {
             setTimeout(() => {
               if (writer && !writer.closed) writer.close()
 
-              if (!isNearlyComplete) {
-                try {
-                  if (fsc.existsSync(filePath)) fsc.unlinkSync(filePath)
-                } catch (cleanupErr) {
-                  logWarning(`Partial file cleanup failed: ${cleanupErr.message}`)
-                }
-              }
-
+              // Don't delete partial file regardless of completion status - allow resuming
               try {
-                if (fsc.existsSync(lockFilePath)) fsc.unlinkSync(lockFilePath)
+                if (fsc.existsSync(lockFilePath)) {
+                  fsc.unlinkSync(lockFilePath)
+                  untrackLockFile(lockFilePath)
+                }
               } catch (cleanupErr) {
                 logWarning(`Lock file cleanup failed: ${cleanupErr.message}`)
               }
 
               if (isFullyComplete) {
-                resolve({ recorded: true })
+                resolve({ recorded: true, resumed: isResuming })
               } else if (
                 isNearlyComplete ||
                 err.message.includes('Premature close') ||
@@ -887,10 +1083,15 @@ const downloadFile = async (item, filePath, progressBar) => {
               ) {
                 const warning = isNearlyComplete
                   ? `Save interrupted at ${completionPercentage.toFixed(1)}% - file should be usable`
-                  : 'Save may be incomplete (Network/FetchTV issue). Check file size.'
-                resolve({ recorded: true, warning })
+                  : 'Save interrupted - can be resumed on next run'
+                resolve({ recorded: false, resumed: isResuming, warning })
               } else {
-                reject(new Error(`Save error: ${err.message}`))
+                // Don't mark as failure so we can resume
+                resolve({
+                  recorded: false,
+                  resumed: isResuming,
+                  warning: `Download interrupted at ${completionPercentage.toFixed(1)}% - will resume on next run`
+                })
               }
             }, 300)
           }, 100)
@@ -899,30 +1100,23 @@ const downloadFile = async (item, filePath, progressBar) => {
           if (writer && !writer.closed) writer.close()
 
           try {
-            if (fsc.existsSync(lockFilePath)) fsc.unlinkSync(lockFilePath)
+            if (fsc.existsSync(lockFilePath)) {
+              fsc.unlinkSync(lockFilePath)
+              untrackLockFile(lockFilePath)
+            }
           } catch (cleanupErr) {
             logWarning(`Lock file cleanup failed: ${cleanupErr.message}`)
           }
 
-          if (!isNearlyComplete) {
-            try {
-              if (fsc.existsSync(filePath)) fsc.unlinkSync(filePath)
-            } catch (cleanupErr) {
-              logWarning(`Partial file cleanup failed: ${cleanupErr.message}`)
-            }
-          }
-
+          // Don't delete partial file - allow resuming
           if (isFullyComplete) {
-            resolve({ recorded: true })
-          } else if (
-            isNearlyComplete ||
-            err.message.includes('Premature close') ||
-            err.message.includes('IncompleteRead') ||
-            err.code === 'ECONNRESET'
-          ) {
-            resolve({ recorded: true, warning: 'Save may be incomplete but should be usable' })
+            resolve({ recorded: true, resumed: isResuming })
           } else {
-            reject(new Error(`Save error: ${err.message}`))
+            resolve({
+              recorded: false,
+              resumed: isResuming,
+              warning: 'Save interrupted - can be resumed on next run'
+            })
           }
         }
       })
@@ -935,10 +1129,13 @@ const downloadFile = async (item, filePath, progressBar) => {
     debug('Outer Save Error (%s): %O', item.title, error)
 
     try {
-      if (fsc.existsSync(lockFilePath)) try { fsc.unlinkSync(lockFilePath) } catch (e) {}
-      if (fsc.existsSync(filePath)) try { fsc.unlinkSync(filePath) } catch (e) {}
+      if (fsc.existsSync(lockFilePath)) {
+        fsc.unlinkSync(lockFilePath)
+        untrackLockFile(lockFilePath)
+      }
+      // Don't delete partial file even on error - allow resuming
     } catch (cleanupErr) {
-      logWarning(`Could not clean up files on error: ${cleanupErr.message}`)
+      logWarning(`Could not clean up lock file on error: ${cleanupErr.message}`)
     }
 
     logError(`Failed to initiate save for ${item.title}: ${error.message}`)
@@ -1107,6 +1304,129 @@ const logError = message => {
 const logHeading = (title, color = 'blueBright') => {
   if (progressBarActive) process.stdout.write('\r\n')
   console.log(chalk[color].bold(`=== ${title} ===`))
+}
+
+const setupSignalHandlers = (lockFilePaths) => {
+  const cleanup = () => {
+    log(chalk.yellow('\nInterrupt detected. Cleaning up lock files…'))
+    for (const lockPath of lockFilePaths) {
+      try {
+        if (fsc.existsSync(lockPath)) {
+          fsc.unlinkSync(lockPath)
+          debug('Removed lock file on interrupt: %s', lockPath)
+        }
+      } catch (err) {
+        debug('Error removing lock file on interrupt: %O', err)
+      }
+    }
+    process.exit(0)
+  }
+
+  process.on('SIGINT', cleanup)
+  process.on('SIGTERM', cleanup)
+  return () => {
+    process.removeListener('SIGINT', cleanup)
+    process.removeListener('SIGTERM', cleanup)
+  }
+}
+
+const registerExitHandlers = (() => {
+  let registered = false
+  return () => {
+    if (registered) return
+
+    const cleanup = () => {
+      if (progressBarActive) process.stdout.write('\r\n')
+      log(chalk.yellow('Interrupt detected. Cleaning up lock files...'))
+
+      const count = syncCleanupLockFiles()
+      log(chalk.yellow(`Cleaned up ${count} lock files.`))
+    }
+
+    const exitHandler = () => {
+      syncCleanupLockFiles()
+    }
+
+    const signalHandler = () => {
+      cleanup()
+
+      // Delay exit slightly to ensure cleanup completes
+      setTimeout(() => {
+        process.exit(0)
+      }, 1000)
+    }
+
+    process.on('SIGINT', signalHandler)
+    process.on('SIGTERM', signalHandler)
+    process.on('exit', exitHandler)
+
+    registered = true
+  }
+})()
+
+const trackLockFile = (lockPath) => {
+  activeLockFiles.add(lockPath)
+  debug('Added lock file to tracking: %s', lockPath)
+}
+
+const untrackLockFile = (lockPath) => {
+  activeLockFiles.delete(lockPath)
+  debug('Removed lock file from tracking: %s', lockPath)
+}
+
+const syncCleanupLockFiles = () => {
+  let count = 0
+  for (const lockPath of activeLockFiles) {
+    try {
+      if (fsc.existsSync(lockPath)) {
+        fsc.unlinkSync(lockPath)
+        count++
+        debug('Removed lock file: %s', lockPath)
+      }
+    } catch (err) {
+      debug('Error removing lock file: %s', lockPath)
+    }
+  }
+  activeLockFiles.clear()
+  return count
+}
+
+const cleanupOrphanedLockFiles = () => {
+  try {
+    if (!argv.save) return
+
+    const savePath = path.resolve(argv.save)
+    if (!fsc.existsSync(savePath)) return
+
+    const findAndCleanLocks = (dirPath) => {
+      const entries = fsc.readdirSync(dirPath, { withFileTypes: true })
+      let count = 0
+
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name)
+
+        if (entry.isDirectory()) {
+          count += findAndCleanLocks(fullPath)
+        } else if (entry.name.endsWith(CONST_LOCK)) {
+          try {
+            fsc.unlinkSync(fullPath)
+            count++
+          } catch (err) {
+            debug('Startup: error removing orphaned lock file: %s', fullPath)
+          }
+        }
+      }
+
+      return count
+    }
+
+    const count = findAndCleanLocks(savePath)
+    if (count > 0) {
+      log(chalk.gray(`Startup: removed ${count} orphaned lock files`))
+    }
+  } catch (err) {
+    debug('Error during orphaned lock file cleanup: %O', err)
+  }
 }
 
 main().catch(error => {
