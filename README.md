@@ -196,6 +196,8 @@ fetchtv <COMMAND> [OPTIONS]
 | `--title`        | `-t`  | `array`   | Filter recordings to episode titles containing the specified text (repeatable)  |
 | `--is-recording` |       | `boolean` | Filter recordings to only those that are currently recording                    |
 | `--save`         |       | `string`  | Save recordings to the specified path                                           |
+| `--template`     |       | `string`  | Template for save path/filename structure (uses --save as base path)            |
+| `--for-plex`     |       | `boolean` | Uses Plex-compatible template for saving recordings (overrides --template)      |
 | `--overwrite`    | `-o`  | `boolean` | Overwrite existing files when saving                                            |
 | `--json`         | `-j`  | `boolean` | Output show/recording/save results in JSON                                      |
 | `--debug`        | `-d`  | `boolean` | Enable verbose logging for debugging                                            |
@@ -270,6 +272,54 @@ Save only items currently being recorded:
 
 ```command
 fetchtv recordings --ip=192.168.86.71 --is-recording --save=./in-progress
+```
+
+Save recordings using a custom path template:
+
+```command
+fetchtv recordings --ip=192.168.86.71 --save=./downloads --template="${show_title}/${recording_title}.${ext}"
+```
+
+Save recordings in Plex-compatible format:
+
+```command
+fetchtv recordings --ip=192.168.86.71 --save=./media --for-plex
+```
+
+## Template Variables
+
+When using `--template`, the following variables are available:
+
+| Variable                   | Description                      | Example                                        |
+| -------------------------- | -------------------------------- | ---------------------------------------------- |
+| `${show_title}`            | Title of the show                | `Australian Survivor`                          |
+| `${recording_title}`       | Title of the recording/episode   | `S10 E2 - Episode 2 of Season 10 - Tue 18 Feb` |
+| `${season_number}`         | Season number (if available)     | `10`                                           |
+| `${episode_number}`        | Episode number (if available)    | `2`                                            |
+| `${episode_number_padded}` | Episode number with leading zero | `02`                                           |
+| `${ext}`                   | File extension (ts, mp4, etc.)   | `ts`                                           |
+
+The `--for-plex` option uses a predefined template optimized for Plex media server:
+
+```txt
+${show_title}/Season ${season_number}/${show_title} - S${season_number}E${episode_number_padded}.${ext}
+```
+
+### Example Templates
+
+Save recordings with show folder and episode naming:
+```
+${show_title}/${recording_title}.${ext}
+```
+
+Save recordings by season and episode number:
+```
+${show_title}/S${season_number}E${episode_number_padded}.${ext}
+```
+
+Save recordings with date-based organization:
+```
+${show_title}/Season ${season_number}/${recording_title}.${ext}
 ```
 
 ## Disclaimer
