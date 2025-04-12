@@ -323,8 +323,6 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
   const jsonResults = []
   const tasks = []
 
-  log(`Preparing to save/resume up to ${recordings.flatMap(s => s.items || []).length} recording(s)…`)
-
   for (const show of recordings) {
     if (!show.items || show.items.length === 0) continue
 
@@ -417,7 +415,7 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
     return jsonResults
   }
 
-  log(`Saving/Resuming ${tasks.length} recording${tasks.length > 1 ? 's' : ''}…`)
+  log(`Saving ${tasks.length} recording${tasks.length > 1 ? 's' : ''}…`)
 
   progressBarActive = true
   const multiBar = new cliProgress.MultiBar({
@@ -1646,6 +1644,14 @@ const processPathTemplate = ({ templateString, data }) => {
     '${episode_number}': data.episode_number || '',
     '${episode_number_padded}': data.episode_number_padded || '',
     '${ext}': data.ext || 'ts',
+  }
+
+  const emptyPlaceholders = Object.keys(placeholders).filter(placeholder => !placeholders[placeholder])
+  for (const emptyPlaceholder of emptyPlaceholders) {
+    if (processedPath.includes(emptyPlaceholder)) {
+      logWarning(`Template contains placeholder "${emptyPlaceholder}" without a matching value.`)
+      throw new Error(`Template contains placeholder "${emptyPlaceholder}" without a matching value.`)
+    }
   }
 
   for (const [placeholder, value] of Object.entries(placeholders)) {
