@@ -269,10 +269,9 @@ const getFetchRecordings = async ({ location, filters }) => {
   const totalShows = filteredShows.length
   let processedShows = 0
 
-  log(`Processing ${totalShows} Fetch TV show directories…`)
   progressBarActive = true
   const progressBar = new cliProgress.SingleBar({
-    format: `Shows Progress |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} Shows`,
+    format: `Processing |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} Shows`,
     barCompleteChar: '\u2588',
     barIncompleteChar: '\u2591'
   }, cliProgress.Presets.shades_classic)
@@ -560,7 +559,7 @@ const printRecordings = ({ recordings, jsonOutput, showsOnly }) => {
 
     recording.items.forEach(item => {
       const durationStr = new Date(item.duration * 1000).toISOString().substr(11, 8)
-      const sizeFormatted = filesize(item.size)
+      const sizeFormatted = filesize(item.size, { spacer: '' })
       log(`  ${chalk.whiteBright(item.title)} ${chalk.gray(`${durationStr} ${sizeFormatted}`)}`)
     })
   })
@@ -988,15 +987,15 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show' }) =
 
 const isCurrentlyRecording = async (item) => {
   if (item.size > 0 && item.size < MAX_OCTET_RECORDING - 1000000) {
-    debug('Skipping recording check for %s, size (%s) seems final.', item.title, filesize(item.size))
+    debug('Skipping recording check for %s, size (%s) seems final.', item.title, filesize(item.size, { spacer: '' }))
     return false
   }
   if (item.size === MAX_OCTET_RECORDING) {
-    debug('Item size for %s matches recording marker exactly (%s).', item.title, filesize(item.size))
+    debug('Item size for %s matches recording marker exactly (%s).', item.title, filesize(item.size, { spacer: '' }))
     return true
   }
 
-  debug('Performing HEAD/GET request to check recording status for %s (initial size: %s)', item.title, filesize(item.size))
+  debug('Performing HEAD/GET request to check recording status for %s (initial size: %s)', item.title, filesize(item.size, { spacer: '' }))
 
   try {
     const response = await httpClient.head(item.url, { timeout: REQUEST_TIMEOUT / 2 })
@@ -1059,7 +1058,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
           if (existingSize > 0) {
             isResuming = true
             validResumable = true
-            debug('File exists, attempting resume from %s', filesize(existingSize))
+            debug('File exists, attempting resume from %s', filesize(existingSize, { spacer: '' }))
           } else {
             isResuming = false
             existingSize = 0
@@ -1100,7 +1099,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
     }
 
     if (isResuming && validResumable) {
-      log(`${chalk.cyan(`Resuming download for: ${path.basename(filePath)}`)} ${chalk.gray(`(from ${filesize(existingSize)})`)}`)
+      log(`${chalk.cyan(`Resuming download for: ${path.basename(filePath)}`)} ${chalk.gray(`(from ${filesize(existingSize, { spacer: '' })})`)}`)
     } else if (!isResuming) {
       log(`${chalk.cyan(`Starting download for: ${path.basename(filePath)}`)}`)
     }
@@ -1126,7 +1125,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       const contentRange = response.headers['content-range']
       if (contentRange && contentRange.includes('/')) {
         totalLength = parseInt(contentRange.split('/')[1], 10)
-        debug('Partial content detected. Total length from Content-Range: %d (%s)', totalLength, filesize(totalLength))
+        debug('Partial content detected. Total length from Content-Range: %d (%s)', totalLength, filesize(totalLength, { spacer: '' }))
       } else {
         logWarning(`Could not determine total size from partial response for ${item.title}. Progress bar may be inaccurate.`)
         totalLength = item.size || 0
@@ -1145,7 +1144,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
           logWarning(`Could not clear existing file after failed resume attempt: ${unlinkErr.message}`)
         }
       }
-      debug('Full content response. Total length from Content-Length: %d (%s)', totalLength, filesize(totalLength))
+      debug('Full content response. Total length from Content-Length: %d (%s)', totalLength, filesize(totalLength, { spacer: '' }))
     }
 
     debug('Download Headers for %s: %O', item.title, response.headers)
@@ -1280,18 +1279,18 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
             const sizeDiff = Math.abs(finalSize - totalLength)
             const tolerance = 1024
             if (sizeDiff > tolerance) {
-              logWarning(`Warning for ${item.title}: Final file size (${filesize(finalSize)}) doesn't match expected size (${filesize(totalLength)}) by ${filesize(sizeDiff)}.`)
+              logWarning(`Warning for ${item.title}: Final file size (${filesize(finalSize, { spacer: '' })}) doesn't match expected size (${filesize(totalLength)}) by ${filesize(sizeDiff, { spacer: '' })}.`)
               resolve({
                 recorded: true,
                 resumed: isResuming,
-                warning: `File size mismatch: final=${filesize(finalSize)}, expected=${filesize(totalLength)}`
+                warning: `File size mismatch: final=${filesize(finalSize, { spacer: '' })}, expected=${filesize(totalLength, { spacer: '' })}`
               })
             } else {
               debug('Final file size is within tolerance of expected size.')
               resolve({ recorded: true, resumed: isResuming })
             }
           } else if (totalLength === 0 && finalSize > 0) {
-            debug('Original content length was 0, but final size is %s. Treating as success.', filesize(finalSize))
+            debug('Original content length was 0, but final size is %s. Treating as success.', filesize(finalSize, { spacer: '' }))
             resolve({ recorded: true, resumed: isResuming })
           } else {
             debug('Final file size matches expected size.')
