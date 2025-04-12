@@ -96,8 +96,8 @@ const main = async () => {
     .alias('o', 'overwrite')
     .alias('j', 'json')
     .alias('d', 'debug')
-    .epilog('Note: Comma-separated values for filters (--show, --exclude, --title) are NOT supported. Instead, repeat option as needed.\nTemplate Variables: ${show_title}, ${recording_title}, ${season_number}, ${episode_number}, ${episode_number_padded}, ${ext}')
-    .wrap(process.stdout.columns ? Math.min(process.stdout.columns, 124) : 124)
+    .epilog('Note: Comma-separated values for filters (--show, --exclude, --title) are NOT supported. Instead, repeat option as needed.\nTemplate Variables: ${show_title}, ${recording_title}, ${season_number[_padded]}, ${episode_number}, ${episode_number[_padded]}, ${ext}')
+    .wrap(process.stdout.columns ? Math.min(process.stdout.columns, 135) : 135)
     .argv
 
   if (argv.debug) {
@@ -330,6 +330,7 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
         show_title: show.title,
         recording_title: item.title,
         season_number: item.season_number || '',
+        season_number_padded: item.season_number_padded || '',
         episode_number: item.episode_number || '',
         episode_number_padded: item.episode_number_padded || '',
         ext: item.ext || 'ts'
@@ -923,12 +924,14 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show' }) =
     const title = getXmlText({ node: item.title })
 
     let seasonNumber = null
+    let seasonNumberPadded = null
     let episodeNumber = null
     let episodeNumberPadded = null
 
     const seMatch = title.match(/S(?:eason)?\s*(\d{1,3})\s*E(?:pisode)?\s*(\d{1,3})/i)
     if (seMatch) {
       seasonNumber = seMatch[1]
+      seasonNumberPadded = seasonNumber.padStart(2, '0')
       episodeNumber = seMatch[2]
       episodeNumberPadded = episodeNumber.padStart(2, '0')
       debug('Extracted S/E from title "%s": S%s E%s', title, seasonNumber, episodeNumber)
@@ -937,6 +940,7 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show' }) =
       const parentMatch = parentTaskName?.match(/S(\d{1,3})\s*E(\d{1,3})/i)
       if (parentMatch) {
         seasonNumber = parentMatch[1]
+        seasonNumberPadded = seasonNumber.padStart(2, '0')
         episodeNumber = parentMatch[2]
         episodeNumberPadded = episodeNumber.padStart(2, '0')
         debug('Extracted S/E from parentTaskName "%s": S%s E%s', parentTaskName, seasonNumber, episodeNumber)
@@ -967,6 +971,7 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show' }) =
       duration: tsToSeconds(getXmlAttr({ node: actualRes, attrName: 'duration' })),
       show_title: showTitle,
       season_number: seasonNumber,
+      season_number_padded: seasonNumberPadded,
       episode_number: episodeNumber,
       episode_number_padded: episodeNumberPadded,
       ext: ext,
@@ -1549,6 +1554,7 @@ const formatItem = (item) => ({
   description: item.description,
   show_title: item.show_title,
   season_number: item.season_number,
+  season_number_padded: item.season_number_padded,
   episode_number: item.episode_number,
   episode_number_padded: item.episode_number_padded,
   ext: item.ext
@@ -1624,6 +1630,7 @@ const processPathTemplate = ({ templateString, data }) => {
     '${show_title}': data.show_title || '',
     '${recording_title}': data.recording_title || '',
     '${season_number}': data.season_number || '',
+    '${season_number_padded}': data.season_number_padded || '',
     '${episode_number}': data.episode_number || '',
     '${episode_number_padded}': data.episode_number_padded || '',
     '${ext}': data.ext || 'ts',
