@@ -1344,6 +1344,8 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
           return
         }
         const completionPercentage = totalLength > 0 ? Math.min(100, (downloadedLength / totalLength) * 100) : 0
+        const isEffectivelyComplete = completionPercentage >= 99.9
+        const isNearlyComplete = completionPercentage > 98
         debug('Response Stream Error Details (%s): Code: %s, Message: %s', item.title, err.code, err.message)
 
         if (progressBar) {
@@ -1368,7 +1370,12 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
             const isECONNRESET = err.code === 'ECONNRESET'
             const isTimeout = err.code === 'ECONNABORTED' || (err.message && err.message.toLowerCase().includes('timeout'))
             const isPrematureClose = err.message && err.message.includes('Premature close')
-            const isNearlyComplete = completionPercentage > 98
+
+            if (isEffectivelyComplete && (isECONNRESET || isPrematureClose)) {
+              debug('File download complete despite connection reset/close. Treating as success.')
+              resolve({ recorded: true, resumed: isResuming })
+              return
+            }
 
             let warningMessage = `Download interrupted for ${item.title} at ${completionPercentage.toFixed(1)}%.`
             if (isECONNRESET) warningMessage += ' (Connection reset)'
