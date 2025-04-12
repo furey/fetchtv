@@ -444,12 +444,12 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
     const progressBar = multiBar.create(task.item.size || 1, 0, {
       filename: chalk.whiteBright(path.basename(task.filePath).slice(0, 30).padEnd(30)),
       speed: 'N/A',
-      eta: 'N/A',
-      value: filesize(0),
-      total: filesize(task.item.size || 0)
+      pbETA: 'N/A',
+      pbValue: filesize(0, { spacer: '' }),
+      pbTotal: filesize(task.item.size || 0, { spacer: '' })
     })
 
-    progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} | {speed}/s | ETA: {eta}`
+    progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {pbValue}/{pbTotal} | {speed}/s | ETA: {pbETA}`
 
     const promise = downloadFile({ item: task.item, filePath: task.filePath, progressBar, overwrite })
       .then(async (downloadResult) => {
@@ -1192,9 +1192,9 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       progressBar.setTotal(barTotal)
       progressBar.update(existingSize, {
         speed: 'N/A',
-        eta: 'N/A',
-        value: filesize(existingSize),
-        total: filesize(barTotal)
+        pbETA: 'N/A',
+        pbValue: filesize(existingSize, { spacer: 0 }),
+        pbTotal: filesize(barTotal, { spacer: 0 })
       })
       debug('Progress bar initialized. Current: %d, Total: %d', existingSize, barTotal)
     }
@@ -1224,10 +1224,10 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
         if (!isShuttingDown) {
           const currentProgressBarValue = Math.min(downloadedLength, progressBar.getTotal())
           progressBar.update(currentProgressBarValue, {
-            speed: filesize(speed),
-            eta: etaSeconds === Infinity ? '∞' : prettyMs(etaSeconds * 1000, { compact: true }),
-            value: filesize(currentProgressBarValue),
-            total: filesize(progressBar.getTotal())
+            speed: filesize(speed, { spacer: 0 }),
+            pbETA: etaSeconds === Infinity ? '∞' : prettyMs(etaSeconds * 1000, { secondsDecimalDigits: 0 }),
+            pbValue: filesize(currentProgressBarValue, { spacer: 0 }),
+            pbTotal: filesize(progressBar.getTotal(), { spacer: 0 })
           })
         }
         lastUpdateTime = now
@@ -1344,6 +1344,8 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
           return
         }
         const completionPercentage = totalLength > 0 ? Math.min(100, (downloadedLength / totalLength) * 100) : 0
+        const isEffectivelyComplete = completionPercentage >= 99.9
+        const isNearlyComplete = completionPercentage > 98
         debug('Response Stream Error Details (%s): Code: %s, Message: %s', item.title, err.code, err.message)
 
         if (progressBar) {
@@ -1368,7 +1370,12 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
             const isECONNRESET = err.code === 'ECONNRESET'
             const isTimeout = err.code === 'ECONNABORTED' || (err.message && err.message.toLowerCase().includes('timeout'))
             const isPrematureClose = err.message && err.message.includes('Premature close')
-            const isNearlyComplete = completionPercentage > 98
+
+            if (isEffectivelyComplete && (isECONNRESET || isPrematureClose)) {
+              debug('File download complete despite connection reset/close. Treating as success.')
+              resolve({ recorded: true, resumed: isResuming })
+              return
+            }
 
             let warningMessage = `Download interrupted for ${item.title} at ${completionPercentage.toFixed(1)}%.`
             if (isECONNRESET) warningMessage += ' (Connection reset)'
