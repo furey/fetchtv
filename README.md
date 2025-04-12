@@ -13,6 +13,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Template Variables](#template-variables)
 - [Examples](#examples)
 - [Disclaimer](#disclaimer)
 - [Support](#support)
@@ -167,20 +168,20 @@ docker run -t --rm fetchtv recordings --ip=192.168.86.71
 
 If you [installed via NPX](#installation-npx), you can run it from anywhere:
 
-```command
+```console
 npx fetchtv <COMMAND> [OPTIONS]
 ```
 
 If you [installed from Node.js source](#installation-nodejs-from-source), you can run it from the cloned repo directory:
 
-```command
+```console
 cd /path/to/fetchtv
 node fetchtv.js <COMMAND> [OPTIONS]
 ```
 
 If you [linked the tool](#optional-link-fetchtv-tool) after installing from source, you can run it from anywhere:
 
-```command
+```console
 fetchtv <COMMAND> [OPTIONS]
 ```
 
@@ -203,90 +204,13 @@ fetchtv <COMMAND> [OPTIONS]
 | `--debug`        | `-d`  | `boolean` | Enable verbose logging for debugging                                            |
 | `--help`         | `-h`  | `boolean` | Show help message                                                               |
 
-## Examples
+### Template Variables
 
-> [!NOTE]<br>
-> The following examples assume you have a Fetch TV server on your local network and you've [linked the tool](#optional-link-fetchtv-tool) to your system path.
-
-Search for Fetch TV servers:
-
-```command
-fetchtv
-```
-
-Display Fetch box details (uses auto-discovery):
-
-```command
-fetchtv info
-```
-
-List recorded show titles:
-
-```command
-fetchtv shows --ip=192.168.86.71
-```
-
-List recordings:
-
-```command
-fetchtv recordings --ip=192.168.86.71
-```
-
-List recordings and output as JSON:
-
-```command
-fetchtv recordings --ip=192.168.86.71 --json
-```
-
-Save new recordings to `./downloads` (creates directory if needed):
-
-```command
-fetchtv recordings --ip=192.168.86.71 --save=./downloads
-```
-
-Save new recordings but exclude show titles containing `News`:
-
-```command
-fetchtv recordings --ip=192.168.86.71 --exclude=News --save=./downloads
-```
-
-Save new episodes for the show `MasterChef`:
-
-```command
-fetchtv recordings --ip=192.168.86.71 --show=MasterChef --save=./downloads
-```
-
-Save & overwrite specific `MasterChef` episodes containing `S04E12` or `S04E13`:
-
-```command
-fetchtv recordings --ip=192.168.86.71 --show=MasterChef --title=S04E12 --title=S04E13 --save=./downloads --overwrite
-```
-
-List only items currently being recorded:
-
-```command
-fetchtv recordings --ip=192.168.86.71 --is-recording
-```
-
-Save only items currently being recorded:
-
-```command
-fetchtv recordings --ip=192.168.86.71 --is-recording --save=./in-progress
-```
-
-Save recordings using a custom path template:
-
-```command
-fetchtv recordings --ip=192.168.86.71 --save=./downloads --template="${show_title}/${recording_title}.${ext}"
-```
-
-Save recordings in Plex-compatible format:
-
-```command
-fetchtv recordings --ip=192.168.86.71 --save=./media --for-plex
-```
-
-## Template Variables
+> [!IMPORTANT]<br>
+> When using `--template`, the template string must be enclosed in single quotes (`'`) to prevent shell expansion. For example:<br>
+> ```console
+>fetchtv recordings --save=./downloads --template='${show_title}/${recording_title}.${ext}'
+> ```
 
 When using `--template`, the following variables are available:
 
@@ -295,31 +219,117 @@ When using `--template`, the following variables are available:
 | `${show_title}`            | Title of the show                | `Australian Survivor`                          |
 | `${recording_title}`       | Title of the recording/episode   | `S10 E2 - Episode 2 of Season 10 - Tue 18 Feb` |
 | `${season_number}`         | Season number (if available)     | `10`                                           |
+| `${season_number_padded}`  | Season number with leading zero  | `10`                                           |
 | `${episode_number}`        | Episode number (if available)    | `2`                                            |
 | `${episode_number_padded}` | Episode number with leading zero | `02`                                           |
-| `${ext}`                   | File extension (ts, mp4, etc.)   | `ts`                                           |
+| `${ext}`                   | File extension (ts, mp4, etc)    | `ts`                                           |
+
+#### Plex-Compatible Template
 
 The `--for-plex` option uses a predefined template optimized for Plex media server:
 
-```txt
-${show_title}/Season ${season_number}/${show_title} - S${season_number}E${episode_number_padded}.${ext}
+```js
+`${show_title}/Season ${season_number}/${show_title} - S${season_number}E${episode_number_padded}.${ext}`
 ```
 
-### Example Templates
+#### Example Templates
 
-Save recordings with show folder and episode naming:
+Save recordings with show folder:
 ```
 ${show_title}/${recording_title}.${ext}
 ```
 
-Save recordings by season and episode number:
+Save recordings with show folder and `SXXEXX` episode naming:
 ```
-${show_title}/S${season_number}E${episode_number_padded}.${ext}
+${show_title}/S${season_number_padded}E${episode_number_padded}.${ext}
 ```
 
-Save recordings with date-based organization:
+Save recordings with show and season folders:
 ```
 ${show_title}/Season ${season_number}/${recording_title}.${ext}
+```
+
+## Examples
+
+> [!NOTE]<br>
+> The following examples assume you have a Fetch TV server on your local network and you've [linked the tool](#optional-link-fetchtv-tool) to your system path.
+
+Search for Fetch TV servers:
+
+```console
+fetchtv
+```
+
+Display Fetch box details (uses auto-discovery):
+
+```console
+fetchtv info
+```
+
+List recorded show titles:
+
+```console
+fetchtv shows --ip=192.168.86.71
+```
+
+List recordings:
+
+```console
+fetchtv recordings --ip=192.168.86.71
+```
+
+List recordings and output as JSON:
+
+```console
+fetchtv recordings --ip=192.168.86.71 --json
+```
+
+Save new recordings to `./downloads` (creates directory if needed):
+
+```console
+fetchtv recordings --ip=192.168.86.71 --save=./downloads
+```
+
+Save new recordings but exclude show titles containing `News`:
+
+```console
+fetchtv recordings --ip=192.168.86.71 --exclude=News --save=./downloads
+```
+
+Save new episodes for the show `MasterChef`:
+
+```console
+fetchtv recordings --ip=192.168.86.71 --show=MasterChef --save=./downloads
+```
+
+Save & overwrite specific `MasterChef` episodes containing `S04E12` or `S04E13`:
+
+```console
+fetchtv recordings --ip=192.168.86.71 --show=MasterChef --title=S04E12 --title=S04E13 --save=./downloads --overwrite
+```
+
+List only items currently being recorded:
+
+```console
+fetchtv recordings --ip=192.168.86.71 --is-recording
+```
+
+Save only items currently being recorded:
+
+```console
+fetchtv recordings --ip=192.168.86.71 --is-recording --save=./in-progress
+```
+
+Save recordings using a custom path template:
+
+```console
+fetchtv recordings --ip=192.168.86.71 --save=./downloads --template='${show_title}/${recording_title}.${ext}'
+```
+
+Save recordings in Plex-compatible path format:
+
+```console
+fetchtv recordings --ip=192.168.86.71 --save=./media --for-plex
 ```
 
 ## Disclaimer
