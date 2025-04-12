@@ -2,6 +2,7 @@
 
 import os from 'os'
 import fsc from 'fs'
+import ora from 'ora'
 import _ from 'lodash'
 import path from 'path'
 import axios from 'axios'
@@ -167,12 +168,12 @@ const main = async () => {
 }
 
 const discoverFetch = async ({ ip, port }) => {
+  const spinner = ora('Looking for Fetch TV servers…').start()
   const locations = new Set()
 
   if (ip) {
     locations.add(`http://${ip}:${port}/MediaServer.xml`)
   } else {
-    log('Looking for Fetch TV servers…')
     const client = new SsdpClient()
     client.on('response', (headers) => {
       if (headers.LOCATION) locations.add(headers.LOCATION)
@@ -184,6 +185,7 @@ const discoverFetch = async ({ ip, port }) => {
       await new Promise(resolve => setTimeout(resolve, DISCOVERY_TIMEOUT))
       client.stop()
     } catch (err) {
+      spinner.fail('SSDP discovery failed.')
       logError(`SSDP discovery failed: ${err.message}`)
       client.stop()
       return null
@@ -191,6 +193,7 @@ const discoverFetch = async ({ ip, port }) => {
   }
 
   if (locations.size === 0) {
+    spinner.fail('No Fetch TV servers found.')
     logError('Discovery failed: No UPnP devices found.')
     return null
   }
@@ -199,9 +202,12 @@ const discoverFetch = async ({ ip, port }) => {
   const fetchServer = parsedLocations.find(loc => loc.manufacturerURL === FETCH_MANUFACTURER_URL)
 
   if (!fetchServer) {
+    spinner.fail('No Fetch TV servers found.')
     logError('Discovery failed: Unable to locate Fetch TV UPnP service.')
     return null
   }
+
+  spinner.succeed('Fetch TV found.')
 
   const url = new URL(fetchServer.url)
   const hostname = url.hostname
@@ -318,7 +324,7 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
   const jsonResults = []
   const tasks = []
 
-  log(`Preparing to save/resume up to ${recordings.flatMap(s => s.items || []).length} recording(s)...`)
+  log(`Preparing to save/resume up to ${recordings.flatMap(s => s.items || []).length} recording(s)…`)
 
   for (const show of recordings) {
     if (!show.items || show.items.length === 0) continue
@@ -613,7 +619,7 @@ const syncCleanupLockFiles = () => {
     debug('Sync cleanup: No active lock files to remove.')
     return 0
   }
-  debug('Sync cleanup: Removing %d active lock file(s)...', activeLockFiles.size)
+  debug('Sync cleanup: Removing %d active lock file(s)…', activeLockFiles.size)
   const filesToRemove = Array.from(activeLockFiles)
   for (const lockPath of filesToRemove) {
     try {
@@ -662,7 +668,7 @@ const registerExitHandlers = (() => {
         process.stdout.write('\r\x1b[K')
       }
 
-      console.log(chalk.yellow('\nInterrupt signal received. Attempting graceful shutdown...'))
+      console.log(chalk.yellow('\nInterrupt signal received. Attempting graceful shutdown…'))
 
       const count = syncCleanupLockFiles()
       if (count > 0) {
@@ -1002,7 +1008,7 @@ const isCurrentlyRecording = async (item) => {
   } catch (headError) {
     debug('HEAD request failed for %s: %O', item.title, headError)
     if (headError.response?.status === 405 || headError.code === 'ECONNABORTED' || !headError.response) {
-      debug('HEAD failed for %s, attempting GET fallback check...', item.title)
+      debug('HEAD failed for %s, attempting GET fallback check…', item.title)
       try {
         const response = await httpClient.get(item.url, {
           timeout: REQUEST_TIMEOUT,
@@ -1657,7 +1663,7 @@ const processPathTemplate = ({ templateString, data }) => {
     .replace(/[.\/\\]+$/, '')
 
   if (processedPath.length > MAX_FILENAME * 3) {
-    logWarning(`Generated path seems very long, potentially problematic: ${processedPath.slice(0, 100)}...`)
+    logWarning(`Generated path seems very long, potentially problematic: ${processedPath.slice(0, 100)}…`)
   }
 
   debugTemplate('Final processed path segment: %s', processedPath)

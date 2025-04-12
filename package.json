@@ -1,6 +1,6 @@
 {
   "name": "fetchtv",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": "James Furey (https://about.me/jamesfurey)",
   "description": "A Node.js CLI tool to manage Fetch TV recordings.",
   "license": "GPL-3.0-or-later",
@@ -34,6 +34,7 @@
     "filesize": "^10.1.0",
     "lodash": "^4.17.21",
     "node-ssdp": "^4.0.1",
+    "ora": "^8.2.0",
     "pretty-ms": "^9.0.0",
     "yargs": "^17.7.2"
   },
