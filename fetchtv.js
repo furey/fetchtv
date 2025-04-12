@@ -444,12 +444,12 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
     const progressBar = multiBar.create(task.item.size || 1, 0, {
       filename: chalk.whiteBright(path.basename(task.filePath).slice(0, 30).padEnd(30)),
       speed: 'N/A',
-      eta: 'N/A',
-      value: filesize(0),
-      total: filesize(task.item.size || 0)
+      pbETA: 'N/A',
+      pbValue: filesize(0, { spacer: '' }),
+      pbTotal: filesize(task.item.size || 0, { spacer: '' })
     })
 
-    progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} | {speed}/s | ETA: {eta}`
+    progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {pbValue}/{pbTotal} | {speed}/s | ETA: {pbETA}`
 
     const promise = downloadFile({ item: task.item, filePath: task.filePath, progressBar, overwrite })
       .then(async (downloadResult) => {
@@ -1192,9 +1192,9 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       progressBar.setTotal(barTotal)
       progressBar.update(existingSize, {
         speed: 'N/A',
-        eta: 'N/A',
-        value: filesize(existingSize),
-        total: filesize(barTotal)
+        pbETA: 'N/A',
+        pbValue: filesize(existingSize, { spacer: 0 }),
+        pbTotal: filesize(barTotal, { spacer: 0 })
       })
       debug('Progress bar initialized. Current: %d, Total: %d', existingSize, barTotal)
     }
@@ -1224,10 +1224,10 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
         if (!isShuttingDown) {
           const currentProgressBarValue = Math.min(downloadedLength, progressBar.getTotal())
           progressBar.update(currentProgressBarValue, {
-            speed: filesize(speed),
-            eta: etaSeconds === Infinity ? '∞' : prettyMs(etaSeconds * 1000, { compact: true }),
-            value: filesize(currentProgressBarValue),
-            total: filesize(progressBar.getTotal())
+            speed: filesize(speed, { spacer: 0 }),
+            pbETA: etaSeconds === Infinity ? '∞' : prettyMs(etaSeconds * 1000, { secondsDecimalDigits: 0 }),
+            pbValue: filesize(currentProgressBarValue, { spacer: 0 }),
+            pbTotal: filesize(progressBar.getTotal(), { spacer: 0 })
           })
         }
         lastUpdateTime = now
