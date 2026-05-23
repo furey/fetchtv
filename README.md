@@ -16,6 +16,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Template Variables](#template-variables)
 - [Examples](#examples)
 - [Programmatic API](#programmatic-api)
+- [GitHub Workflows](#github-workflows)
 - [Disclaimer](#disclaimer)
 - [Support](#support)
 
@@ -374,6 +375,23 @@ const servers = await discoverFetchServers()
 Designed for callers that need to enumerate all Fetch TV boxes on the network (e.g. to surface a chooser UI) rather than the CLI's "first match wins" behaviour.
 
 The module is safe to `import` — running the CLI requires invoking `fetchtv.js` directly as a script.
+
+## GitHub Workflows
+
+Two release-triggered workflows publish `fetchtv` whenever a GitHub release is created.
+
+| Workflow              | File                                                           | Trigger            | Publishes To                                                            |
+| --------------------- | -------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------- |
+| Publish to NPM        | [`publish-npm.yml`](./.github/workflows/publish-npm.yml)       | `release: created` | [`fetchtv` on NPM](https://www.npmjs.com/package/fetchtv)               |
+| Publish to Docker Hub | [`publish-docker.yml`](./.github/workflows/publish-docker.yml) | `release: created` | [`furey/fetchtv` on Docker Hub](https://hub.docker.com/r/furey/fetchtv) |
+
+### Publish to NPM
+
+Checks out the repo, sets up Node.js 22, runs `npm ci`, then `npm publish` against the public NPM registry using the `NPM_TOKEN` secret.
+
+### Publish to Docker Hub
+
+Builds multi-arch images (`linux/amd64`, `linux/arm64`) via Buildx + QEMU, authenticates with `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`, and pushes tags derived from the release's semver (`{{version}}`, `{{major}}.{{minor}}`, `latest`) to `furey/fetchtv`.
 
 ## Disclaimer
 
