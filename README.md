@@ -15,6 +15,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Usage](#usage)
 - [Template Variables](#template-variables)
 - [Examples](#examples)
+- [Programmatic API](#programmatic-api)
 - [Disclaimer](#disclaimer)
 - [Support](#support)
 
@@ -331,6 +332,26 @@ Save recordings in Plex-compatible path format:
 ```console
 fetchtv recordings --ip=192.168.86.71 --save=./media --for-plex
 ```
+
+## Programmatic API
+
+In addition to the CLI, `fetchtv.js` can be imported as an ES module by other Node projects.
+
+```js
+import { discoverFetchServers } from 'fetchtv'
+
+const servers = await discoverFetchServers()
+//  → [{ url, friendlyName, manufacturer, manufacturerURL,
+//        modelDescription, modelName, modelNumber, ... }, …]
+```
+
+| Export                 | Signature                                            | Returns                                                                 |
+| ---------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------- |
+| `discoverFetchServers` | `({ timeoutMs = 3000 } = {}) => Promise<Server[]>`   | Every Fetch TV device found on the LAN via SSDP. Empty array if none.   |
+
+Designed for callers that need to enumerate all Fetch TV boxes on the network (e.g. to surface a chooser UI) rather than the CLI's "first match wins" behaviour.
+
+The module is safe to `import` — running the CLI requires invoking `fetchtv.js` directly as a script.
 
 ## Disclaimer
 
