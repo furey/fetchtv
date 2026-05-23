@@ -21,7 +21,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 
 ## Demo
 
-https://gist.github.com/user-attachments/assets/61dfab62-a715-4cc3-a4d1-93ee0db43827
+<https://gist.github.com/user-attachments/assets/61dfab62-a715-4cc3-a4d1-93ee0db43827>
 
 ## Quick Start
 
@@ -69,22 +69,31 @@ npx fetchtv recordings
 > Node.js from source requires [Node.js](https://nodejs.org/en/download) installed and running on your system (suggestion: use [Volta](https://volta.sh)).
 
 1. Clone the `fetchtv` repository:<br>
+
     ```console
     git clone https://github.com/furey/fetchtv.git
     ```
+
 1. Navigate to the cloned repository directory:<br>
+
     ```console
     cd /path/to/fetchtv
     ```
+
 1. Ensure Node.js is running:<br>
+
     ```console
     node --version # Ideally >= v22.x but fetchtv is >= v18.x compatible
     ```
+
 1. Install Node.js dependencies:<br>
+
     ```console
     npm ci
     ```
+
 1. Run `fetchtv`:<br>
+
     ```console
     node fetchtv.js
     node fetchtv.js info
@@ -125,22 +134,31 @@ npm unlink
 > Docker from source requires [Docker](https://docs.docker.com/get-started/get-docker) installed and running on your system.
 
 1. Clone the `fetchtv` repository:<br>
+
     ```console
     git clone https://github.com/furey/fetchtv.git
     ```
+
 1. Navigate to the cloned repository directory:<br>
+
     ```console
     cd /path/to/fetchtv
     ```
+
 1. Ensure Docker is running:<br>
+
     ```console
     docker --version # Ideally >= v27.x
     ```
+
 1. Build the Docker image:<br>
+
     ```console
     docker build -t fetchtv .
     ```
+
 1. Run the container:<br>
+
     ```console
     docker run -t --rm fetchtv
     docker run -t --rm fetchtv info
@@ -209,6 +227,7 @@ fetchtv <COMMAND> [OPTIONS]
 
 > [!IMPORTANT]<br>
 > When using `--template`, the template string must be enclosed in single quotes (`'`) to prevent shell expansion. For example:<br>
+>
 > ```console
 >fetchtv recordings --save=./downloads --template='${show_title}/${recording_title}.${ext}'
 > ```
@@ -236,16 +255,19 @@ The `--for-plex` option uses a predefined template optimized for Plex media serv
 #### Example Templates
 
 Save recordings with show folder:
+
 ```
 ${show_title}/${recording_title}.${ext}
 ```
 
 Save recordings with show folder and `SXXEXX` episode naming:
+
 ```
 ${show_title}/S${season_number_padded}E${episode_number_padded}.${ext}
 ```
 
 Save recordings with show and season folders:
+
 ```
 ${show_title}/Season ${season_number}/${recording_title}.${ext}
 ```
@@ -345,9 +367,9 @@ const servers = await discoverFetchServers()
 //        modelDescription, modelName, modelNumber, ... }, …]
 ```
 
-| Export                 | Signature                                            | Returns                                                                 |
-| ---------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------- |
-| `discoverFetchServers` | `({ timeoutMs = 3000 } = {}) => Promise<Server[]>`   | Every Fetch TV device found on the LAN via SSDP. Empty array if none.   |
+| Export                 | Signature                                          | Returns                                                               |
+| ---------------------- | -------------------------------------------------- | --------------------------------------------------------------------- |
+| `discoverFetchServers` | `({ timeoutMs = 3000 } = {}) => Promise<Server[]>` | Every Fetch TV device found on the LAN via SSDP. Empty array if none. |
 
 Designed for callers that need to enumerate all Fetch TV boxes on the network (e.g. to surface a chooser UI) rather than the CLI's "first match wins" behaviour.
 
