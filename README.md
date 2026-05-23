@@ -15,12 +15,14 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Usage](#usage)
 - [Template Variables](#template-variables)
 - [Examples](#examples)
+- [Programmatic API](#programmatic-api)
+- [GitHub Workflows](#github-workflows)
 - [Disclaimer](#disclaimer)
 - [Support](#support)
 
 ## Demo
 
-https://gist.github.com/user-attachments/assets/61dfab62-a715-4cc3-a4d1-93ee0db43827
+<https://gist.github.com/user-attachments/assets/61dfab62-a715-4cc3-a4d1-93ee0db43827>
 
 ## Quick Start
 
@@ -68,22 +70,31 @@ npx fetchtv recordings
 > Node.js from source requires [Node.js](https://nodejs.org/en/download) installed and running on your system (suggestion: use [Volta](https://volta.sh)).
 
 1. Clone the `fetchtv` repository:<br>
+
     ```console
     git clone https://github.com/furey/fetchtv.git
     ```
+
 1. Navigate to the cloned repository directory:<br>
+
     ```console
     cd /path/to/fetchtv
     ```
+
 1. Ensure Node.js is running:<br>
+
     ```console
     node --version # Ideally >= v22.x but fetchtv is >= v18.x compatible
     ```
+
 1. Install Node.js dependencies:<br>
+
     ```console
     npm ci
     ```
+
 1. Run `fetchtv`:<br>
+
     ```console
     node fetchtv.js
     node fetchtv.js info
@@ -124,22 +135,31 @@ npm unlink
 > Docker from source requires [Docker](https://docs.docker.com/get-started/get-docker) installed and running on your system.
 
 1. Clone the `fetchtv` repository:<br>
+
     ```console
     git clone https://github.com/furey/fetchtv.git
     ```
+
 1. Navigate to the cloned repository directory:<br>
+
     ```console
     cd /path/to/fetchtv
     ```
+
 1. Ensure Docker is running:<br>
+
     ```console
     docker --version # Ideally >= v27.x
     ```
+
 1. Build the Docker image:<br>
+
     ```console
     docker build -t fetchtv .
     ```
+
 1. Run the container:<br>
+
     ```console
     docker run -t --rm fetchtv
     docker run -t --rm fetchtv info
@@ -208,6 +228,7 @@ fetchtv <COMMAND> [OPTIONS]
 
 > [!IMPORTANT]<br>
 > When using `--template`, the template string must be enclosed in single quotes (`'`) to prevent shell expansion. For example:<br>
+>
 > ```console
 >fetchtv recordings --save=./downloads --template='${show_title}/${recording_title}.${ext}'
 > ```
@@ -235,16 +256,19 @@ The `--for-plex` option uses a predefined template optimized for Plex media serv
 #### Example Templates
 
 Save recordings with show folder:
+
 ```
 ${show_title}/${recording_title}.${ext}
 ```
 
 Save recordings with show folder and `SXXEXX` episode naming:
+
 ```
 ${show_title}/S${season_number_padded}E${episode_number_padded}.${ext}
 ```
 
 Save recordings with show and season folders:
+
 ```
 ${show_title}/Season ${season_number}/${recording_title}.${ext}
 ```
@@ -331,6 +355,43 @@ Save recordings in Plex-compatible path format:
 ```console
 fetchtv recordings --ip=192.168.86.71 --save=./media --for-plex
 ```
+
+## Programmatic API
+
+In addition to the CLI, `fetchtv.js` can be imported as an ES module by other Node projects.
+
+```js
+import { discoverFetchServers } from 'fetchtv'
+
+const servers = await discoverFetchServers()
+//  → [{ url, friendlyName, manufacturer, manufacturerURL,
+//        modelDescription, modelName, modelNumber, ... }, …]
+```
+
+| Export                 | Signature                                          | Returns                                                               |
+| ---------------------- | -------------------------------------------------- | --------------------------------------------------------------------- |
+| `discoverFetchServers` | `({ timeoutMs = 3000 } = {}) => Promise<Server[]>` | Every Fetch TV device found on the LAN via SSDP. Empty array if none. |
+
+Designed for callers that need to enumerate all Fetch TV boxes on the network (e.g. to surface a chooser UI) rather than the CLI's "first match wins" behaviour.
+
+The module is safe to `import` — running the CLI requires invoking `fetchtv.js` directly as a script.
+
+## GitHub Workflows
+
+Two release-triggered workflows publish `fetchtv` whenever a GitHub release is created.
+
+| Workflow              | File                                                           | Trigger            | Publishes To                                                            |
+| --------------------- | -------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------- |
+| Publish to NPM        | [`publish-npm.yml`](./.github/workflows/publish-npm.yml)       | `release: created` | [`fetchtv` on NPM](https://www.npmjs.com/package/fetchtv)               |
+| Publish to Docker Hub | [`publish-docker.yml`](./.github/workflows/publish-docker.yml) | `release: created` | [`furey/fetchtv` on Docker Hub](https://hub.docker.com/r/furey/fetchtv) |
+
+### Publish to NPM
+
+Checks out the repo, sets up Node.js 22, runs `npm ci`, then `npm publish` against the public NPM registry using the `NPM_TOKEN` secret.
+
+### Publish to Docker Hub
+
+Builds multi-arch images (`linux/amd64`, `linux/arm64`) via Buildx + QEMU, authenticates with `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`, and pushes tags derived from the release's semver (`{{version}}`, `{{major}}.{{minor}}`, `latest`) to `furey/fetchtv`.
 
 ## Disclaimer
 
