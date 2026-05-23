@@ -6,7 +6,7 @@ import ora from 'ora'
 import _ from 'lodash'
 import path from 'path'
 import axios from 'axios'
-import { URL } from 'url'
+import { URL, pathToFileURL } from 'url'
 import yargs from 'yargs'
 import chalk from 'chalk'
 import fs from 'fs/promises'
@@ -177,10 +177,8 @@ const discoverFetchServers = async ({ timeoutMs = DISCOVERY_TIMEOUT } = {}) => {
   try {
     client.search('ssdp:all')
     await new Promise(resolve => setTimeout(resolve, timeoutMs))
+  } finally {
     client.stop()
-  } catch (err) {
-    client.stop()
-    throw err
   }
 
   if (locations.size === 0) return []
@@ -1701,7 +1699,7 @@ const logWarning = message => console.log(chalk.yellow.bold(message))
 const logError = message => console.log(chalk.red.bold(message))
 const logHeading = (title, color = 'blueBright') => console.log(chalk[color].bold(`=== ${title} ===`))
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(error => {
     if (activeMultiBar) {
       activeMultiBar.stop()
