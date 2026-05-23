@@ -167,6 +167,27 @@ const main = async () => {
   logHeading(`Done: ${new Date().toLocaleString()}`)
 }
 
+const discoverFetchServers = async ({ timeoutMs = DISCOVERY_TIMEOUT } = {}) => {
+  const locations = new Set()
+  const client = new SsdpClient()
+  client.on('response', (headers) => {
+    if (headers.LOCATION) locations.add(headers.LOCATION)
+  })
+
+  try {
+    client.search('ssdp:all')
+    await new Promise(resolve => setTimeout(resolve, timeoutMs))
+    client.stop()
+  } catch (err) {
+    client.stop()
+    throw err
+  }
+
+  if (locations.size === 0) return []
+  const parsedLocations = await parseLocations([...locations])
+  return parsedLocations.filter(loc => loc.manufacturerURL === FETCH_MANUFACTURER_URL)
+}
+
 const discoverFetch = async ({ ip, port }) => {
   const spinner = ora('Looking for Fetch TV servers…').start()
   const locations = new Set()
@@ -1680,37 +1701,43 @@ const logWarning = message => console.log(chalk.yellow.bold(message))
 const logError = message => console.log(chalk.red.bold(message))
 const logHeading = (title, color = 'blueBright') => console.log(chalk[color].bold(`=== ${title} ===`))
 
-main().catch(error => {
-  if (activeMultiBar) {
-    activeMultiBar.stop()
-    activeMultiBar = null
-  }
-  progressBarActive = false
-  process.stdout.write('\r\x1b[K')
-
-  logError('\n--- An unexpected error occurred ---')
-  logError(error.message)
-  if (argv.debug || !(error.response || error.request || error.code)) {
-    console.error(error.stack)
-  } else if (error.response) {
-    logError(`Status: ${error.response.status} ${error.response.statusText}`)
-    logError(`URL: ${error.config?.url || error.request?.path || 'N/A'}`)
-    if (error.response.data) {
-      const responseData = typeof error.response.data === 'string'
-        ? error.response.data.slice(0, 300) + (error.response.data.length > 300 ? '...' : '')
-        : '[Object/Stream]'
-      logError(`Response Data: ${responseData}`)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(error => {
+    if (activeMultiBar) {
+      activeMultiBar.stop()
+      activeMultiBar = null
     }
-  } else if (error.request) {
-    logError('Request made but no response received.')
-    logError(`URL: ${error.config?.url || error.request?.path || 'N/A'}`)
-    if (error.code) logError(`Error Code: ${error.code}`)
-  } else if (error.code) {
-    logError(`Error Code: ${error.code}`)
-    if (error.path) logError(`Path: ${error.path}`)
-  }
-  logError('----------------------------------')
+    progressBarActive = false
+    process.stdout.write('\r\x1b[K')
 
-  syncCleanupLockFiles()
-  process.exit(1)
-})
+    logError('\n--- An unexpected error occurred ---')
+    logError(error.message)
+    if (argv.debug || !(error.response || error.request || error.code)) {
+      console.error(error.stack)
+    } else if (error.response) {
+      logError(`Status: ${error.response.status} ${error.response.statusText}`)
+      logError(`URL: ${error.config?.url || error.request?.path || 'N/A'}`)
+      if (error.response.data) {
+        const responseData = typeof error.response.data === 'string'
+          ? error.response.data.slice(0, 300) + (error.response.data.length > 300 ? '...' : '')
+          : '[Object/Stream]'
+        logError(`Response Data: ${responseData}`)
+      }
+    } else if (error.request) {
+      logError('Request made but no response received.')
+      logError(`URL: ${error.config?.url || error.request?.path || 'N/A'}`)
+      if (error.code) logError(`Error Code: ${error.code}`)
+    } else if (error.code) {
+      logError(`Error Code: ${error.code}`)
+      if (error.path) logError(`Path: ${error.path}`)
+    }
+    logError('----------------------------------')
+
+    syncCleanupLockFiles()
+    process.exit(1)
+  })
+}
+
+export {
+  discoverFetchServers,
+}
