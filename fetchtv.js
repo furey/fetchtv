@@ -1003,6 +1003,13 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show' }) =
 }
 
 const isCurrentlyRecording = async (item) => {
+  // Fetch TV uses size <= 0 (typically -1) as an "in progress, size unknown" sentinel
+  // for items whose recording has started but not finished. Treat as definitely-recording
+  // without a HEAD probe — the item URL may still serve partial bytes, so HEAD would lie.
+  if (!Number.isFinite(item.size) || item.size <= 0) {
+    debug('Item %s has non-positive size (%s); treating as currently recording.', item.title, item.size)
+    return true
+  }
   if (item.size > 0 && item.size < MAX_OCTET_RECORDING - 1000000) {
     debug('Skipping recording check for %s, size (%s) seems final.', item.title, filesize(item.size, { spacer: '' }))
     return false
@@ -1048,6 +1055,14 @@ const isCurrentlyRecording = async (item) => {
 }
 
 const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) => {
+  // Refuse to download items whose UPnP listing reports a non-positive size
+  // (Fetch TV's "-1" sentinel for in-progress recordings) — the stream would
+  // serve truncated bytes and we'd silently end up with an incomplete file.
+  if (!Number.isFinite(item.size) || item.size <= 0) {
+    logWarning(`Skipping ${item.title}, size is non-positive (${item.size}) — likely still recording.`)
+    return { recorded: false, warning: `Skipping item, size ${item.size} indicates it's currently recording` }
+  }
+
   const lockFilePath = `${filePath}${CONST_LOCK}`
   let writer = null
   let responseStream = null
@@ -1699,7 +1714,7 @@ const logWarning = message => console.log(chalk.yellow.bold(message))
 const logError = message => console.log(chalk.red.bold(message))
 const logHeading = (title, color = 'blueBright') => console.log(chalk[color].bold(`=== ${title} ===`))
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(error => {
     if (activeMultiBar) {
       activeMultiBar.stop()
@@ -1738,4 +1753,11 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 
 export {
   discoverFetchServers,
+  discoverFetch,
+  getFetchRecordings,
+  downloadFile,
+  isCurrentlyRecording,
+  formatItem,
+  createValidFilename,
+  processPathTemplate,
 }
