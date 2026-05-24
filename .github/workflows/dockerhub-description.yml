@@ -1,0 +1,25 @@
+name: Sync Docker Hub Description
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - DOCKER_README.md
+      - .github/workflows/dockerhub-description.yml
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: furey/fetchtv
+          readme-filepath: ./DOCKER_README.md
+          short-description: "Download Fetch TV PVR recordings over UPnP/DLNA. CLI + programmatic ESM API. No Fetch credentials."
