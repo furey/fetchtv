@@ -4,7 +4,9 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/furey/fetchtv)](https://hub.docker.com/r/furey/fetchtv)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-A Node.js CLI tool to download Fetch TV recordings.
+A Node.js CLI tool to download Fetch TV PVR recordings over the local network.
+
+No Fetch credentials or cloud account required.
 
 Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Python) which is based on [`jinxo13/FetchTV-Helpers`](https://github.com/jinxo13/FetchTV-Helpers) (also Python).
 
@@ -392,10 +394,10 @@ The module is safe to `import` — running the CLI requires invoking `fetchtv.js
 
 Three workflows automate publication and presentation. Two run on release; one keeps the Docker Hub overview in sync.
 
-| Workflow                   | File                                                                           | Trigger                          | Effect                                                                  |
-| -------------------------- | ------------------------------------------------------------------------------ | -------------------------------- | ----------------------------------------------------------------------- |
-| Publish to NPM             | [`publish-npm.yml`](./.github/workflows/publish-npm.yml)                       | `release: created`               | Publishes [`fetchtv` on NPM](https://www.npmjs.com/package/fetchtv)     |
-| Publish to Docker Hub      | [`publish-docker.yml`](./.github/workflows/publish-docker.yml)                 | `release: created`               | Publishes [`furey/fetchtv` on Docker Hub](https://hub.docker.com/r/furey/fetchtv) |
+| Workflow                    | File                                                                         | Trigger                                                | Effect                                                                                                  |
+| --------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Publish to NPM              | [`publish-npm.yml`](./.github/workflows/publish-npm.yml)                     | `release: created`                                     | Publishes [`fetchtv` on NPM](https://www.npmjs.com/package/fetchtv)                                     |
+| Publish to Docker Hub       | [`publish-docker.yml`](./.github/workflows/publish-docker.yml)               | `release: created`                                     | Publishes [`furey/fetchtv` on Docker Hub](https://hub.docker.com/r/furey/fetchtv)                       |
 | Sync Docker Hub Description | [`dockerhub-description.yml`](./.github/workflows/dockerhub-description.yml) | push to `main` touching `DOCKER_README.md` (or manual) | Pushes `DOCKER_README.md` to the [`furey/fetchtv` Hub overview](https://hub.docker.com/r/furey/fetchtv) |
 
 ### Publish to NPM
