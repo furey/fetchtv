@@ -372,21 +372,58 @@ fetchtv recordings --ip=192.168.86.71 --save=./media --for-plex
 
 ## Programmatic API
 
-In addition to the CLI, `fetchtv.js` can be imported as an ES module by other Node projects.
+In addition to the CLI, `fetchtv.js` can be imported as an ES module by other Node projects that want to drive a Fetch TV box programmatically (e.g. a long-running watcher that mirrors new recordings into a media library).
 
 ```js
-import { discoverFetchServers } from 'fetchtv'
+import {
+  discoverFetchServers,
+  discoverFetch,
+  getFetchRecordings,
+  downloadFile
+} from 'fetchtv'
 
+// Enumerate every Fetch TV box on the LAN
 const servers = await discoverFetchServers()
-//  → [{ url, friendlyName, manufacturer, manufacturerURL,
-//        modelDescription, modelName, modelNumber, ... }, …]
+
+// Or grab a single box by IP (returns the full UPnP location object
+// needed by the other helpers below)
+const location = await discoverFetch({ ip: '192.168.1.50', port: 49152 })
+
+// List recordings (optionally filtered)
+const shows = await getFetchRecordings({
+  location,
+  filters: {
+    folderFilter: [],       // include only shows whose title contains any of these (lowercased)
+    excludeFilter: [],      // exclude shows whose title contains any of these (lowercased)
+    titleFilter: [],        // include only items whose title contains any of these (lowercased)
+    showsOnly: false,       // true → return just the show folders, no items
+    isRecordingFilter: false // true → return only items still being recorded
+  }
+})
+
+// Download a single item
+await downloadFile({
+  item: shows[0].items[0],
+  filePath: '/tmp/example.ts',
+  progressBar: null,
+  overwrite: false
+})
 ```
 
-| Export                 | Signature                                          | Returns                                                               |
-| ---------------------- | -------------------------------------------------- | --------------------------------------------------------------------- |
-| `discoverFetchServers` | `({ timeoutMs = 3000 } = {}) => Promise<Server[]>` | Every Fetch TV device found on the LAN via SSDP. Empty array if none. |
+| Export                 | Signature                                                                                           | Returns                                                                                                                                                                              |
+| ---------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `discoverFetchServers` | `({ timeoutMs = 3000 } = {}) => Promise<Server[]>`                                                  | Every Fetch TV device found on the LAN via SSDP. Empty array if none.                                                                                                                |
+| `discoverFetch`        | `({ ip, port }) => Promise<Location \| null>`                                                       | First Fetch TV device matching the given `ip`/`port` (or first found via SSDP if `ip` is omitted), with the full `_rawDeviceXml` payload needed by `getFetchRecordings` and friends. |
+| `getFetchRecordings`   | `({ location, filters }) => Promise<Show[]>`                                                        | Show folders and their items. See example above for `filters` shape.                                                                                                                 |
+| `downloadFile`         | `({ item, filePath, progressBar, overwrite }) => Promise<{ success, filePath, error?, warning? }>`  | Streams a recording to disk (supports resume).                                                                                                                                       |
+| `isCurrentlyRecording` | `(item) => Promise<boolean>`                                                                        | Whether an item is still being recorded (vs. a complete file).                                                                                                                       |
+| `formatItem`           | `(item) => string`                                                                                  | Human-readable description (title, size, duration).                                                                                                                                  |
+| `createValidFilename`  | `(name) => string`                                                                                  | Filesystem-safe version of a string (strips/replaces problematic characters).                                                                                                        |
+| `processPathTemplate`  | `({ template, placeholders }) => string`                                                            | Substitutes `{season}`, `{season_padded}`, `{season_unpadded}` etc. in a path template.                                                                                              |
 
-Designed for callers that need to enumerate all Fetch TV boxes on the network (e.g. to surface a chooser UI) rather than the CLI's "first match wins" behaviour.
+`isCurrentlyRecording` / `downloadFile` recognise two distinct "still recording" sentinels in the UPnP directory listing: the `4398046510080`-byte marker, and any non-positive size (typically `-1`, used by Fetch TV when a recording has started but its final size isn't known yet). Both cause `downloadFile` to refuse the download — partial bytes from an in-progress recording would otherwise be written out as a truncated file.
+
+Deletion is intentionally not exposed: Fetch TV firmware advertises the standard UPnP `DestroyObject` action in its ContentDirectory SCPD but its request handler rejects it (`Unknown Service Action`), and HTTP `DELETE` on the item URL returns `501`. The Fetch box's real control plane for deletion lives in Fetch's cloud APIs (auth + WebSocket to `messages.fetchtv.com.au`) and is out of scope for this LAN-only library.
 
 The module is safe to `import` — running the CLI requires invoking `fetchtv.js` directly as a script.
 
