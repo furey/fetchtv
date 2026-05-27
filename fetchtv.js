@@ -1770,6 +1770,7 @@ export {
   processFilter,
   sortRecordingsByTitle,
   tsToSeconds,
+  getApiService,
   findItems,
   findDirectories,
   browseRequest,
