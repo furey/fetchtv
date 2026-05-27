@@ -439,17 +439,17 @@ npm test
 
 Tests use Node's built-in `node:test` runner (no external framework) and [`nock`](https://github.com/nock/nock) to intercept HTTP. The CLI-level tests in `test/commands.test.js` stand up a local `http.createServer` and spawn `node fetchtv.js --ip 127.0.0.1 --port <random>` against it.
 
-| File                              | What it covers                                                                                                                                            |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `helpers.test.js`                 | Pure helpers: filename sanitization, timestamp parsing, filter normalization, "The"-prefix-aware sort, XML node navigation, item projection               |
-| `xml.test.js`                     | `parseXml` against a Browse-shaped fixture with >1000 entity references (regression catch for `fast-xml-parser` entity-expansion cap changes)             |
-| `didl.test.js`                    | DIDL-Lite item/container parsing: S/E number extraction, extension inference from `protocolInfo`, size/duration coercion                                  |
-| `discovery.test.js`               | `discoverFetch` via explicit `--ip`, including the non-Fetch and unreachable cases                                                                        |
-| `filters.test.js`                 | `--show` / `--exclude` / `--title` filter behaviour end-to-end through `getFetchRecordings`                                                                |
-| `recording-detection.test.js`     | `isCurrentlyRecording` size sentinels and HEAD/GET fallback paths                                                                                         |
-| `templates.test.js`               | `processPathTemplate`: standard placeholders, Plex template, missing-placeholder throw, traversal sanitization                                            |
-| `save.test.js`                    | `loadSavedFiles` / `addSavedFile`, `isLockFileStale`, end-to-end save flow with a mocked download                                                         |
-| `commands.test.js`                | Spawned CLI: `info` / `recordings` / `shows`, prefix-matched commands, `--show` / `--exclude` / `--title`, `--is-recording`, `--json`, `--for-plex`       |
+| File                          | What it covers                                                                                                                                      |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `helpers.test.js`             | Pure helpers: filename sanitization, timestamp parsing, filter normalization, "The"-prefix-aware sort, XML node navigation, item projection         |
+| `xml.test.js`                 | `parseXml` against a Browse-shaped fixture with >1000 entity references (regression catch for `fast-xml-parser` entity-expansion cap changes)       |
+| `didl.test.js`                | DIDL-Lite item/container parsing: S/E number extraction, extension inference from `protocolInfo`, size/duration coercion                            |
+| `discovery.test.js`           | `discoverFetch` via explicit `--ip`, including the non-Fetch and unreachable cases                                                                  |
+| `filters.test.js`             | `--show` / `--exclude` / `--title` filter behaviour end-to-end through `getFetchRecordings`                                                         |
+| `recording-detection.test.js` | `isCurrentlyRecording` size sentinels and HEAD/GET fallback paths                                                                                   |
+| `templates.test.js`           | `processPathTemplate`: standard placeholders, Plex template, missing-placeholder throw, traversal sanitization                                      |
+| `save.test.js`                | `loadSavedFiles` / `addSavedFile`, `isLockFileStale`, end-to-end save flow with a mocked download                                                   |
+| `commands.test.js`            | Spawned CLI: `info` / `recordings` / `shows`, prefix-matched commands, `--show` / `--exclude` / `--title`, `--is-recording`, `--json`, `--for-plex` |
 
 Tests run locally only — there's no CI gate.
 
