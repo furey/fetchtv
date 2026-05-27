@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:BrowseResponse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <Result>&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot; xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot; xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;&lt;item id=&quot;100&quot; parentID=&quot;10&quot; restricted=&quot;1&quot;&gt;&lt;dc:title&gt;S1 E1 - Pilot&lt;/dc:title&gt;&lt;dc:description&gt;Episode 1 of Season 1&lt;/dc:description&gt;&lt;upnp:class&gt;object.item.videoItem&lt;/upnp:class&gt;&lt;res protocolInfo=&quot;http-get:*:video/mpeg-tts:DLNA.ORG_PN=AVC_TS_HD_AC3;DLNA.ORG_OP=01&quot; size=&quot;1073741824&quot; duration=&quot;1:25:30&quot; parentTaskName=&quot;Bluey S1 E1&quot;&gt;http://192.168.1.10:49152/item/100&lt;/res&gt;&lt;/item&gt;&lt;item id=&quot;101&quot; parentID=&quot;10&quot; restricted=&quot;1&quot;&gt;&lt;dc:title&gt;S1 E2 - Hospital&lt;/dc:title&gt;&lt;dc:description&gt;Episode 2 of Season 1&lt;/dc:description&gt;&lt;upnp:class&gt;object.item.videoItem&lt;/upnp:class&gt;&lt;res protocolInfo=&quot;http-get:*:video/mp4:DLNA.ORG_PN=MP4&quot; size=&quot;536870912&quot; duration=&quot;0:24:15&quot;&gt;http://192.168.1.10:49152/item/101&lt;/res&gt;&lt;/item&gt;&lt;item id=&quot;102&quot; parentID=&quot;10&quot; restricted=&quot;1&quot;&gt;&lt;dc:title&gt;In Progress Recording&lt;/dc:title&gt;&lt;dc:description&gt;Currently recording&lt;/dc:description&gt;&lt;upnp:class&gt;object.item.videoItem&lt;/upnp:class&gt;&lt;res protocolInfo=&quot;http-get:*:video/mpeg-tts:*&quot; size=&quot;-1&quot; duration=&quot;0:00:00&quot;&gt;http://192.168.1.10:49152/item/102&lt;/res&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;</Result>
+      <NumberReturned>3</NumberReturned>
+      <TotalMatches>3</TotalMatches>
+      <UpdateID>1</UpdateID>
+    </u:BrowseResponse>
+  </s:Body>
+</s:Envelope>
