@@ -2,6 +2,3 @@ node_modules/
 downloads/
 .DS_Store
 fetchtv.json
-fetchtv.*.js
-repomix*
-!repomix.config.json
