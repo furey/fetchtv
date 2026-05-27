@@ -1483,7 +1483,8 @@ const parseXml = (xmlString) => {
     textNodeName: '#text',
     parseAttributeValue: true,
     removeNSPrefix: true,
-    allowBooleanAttributes: true
+    allowBooleanAttributes: true,
+    processEntities: { enabled: true }
   })
 
   try {
@@ -1502,7 +1503,8 @@ const parseLocations = async (locationsUrls) => {
     textNodeName: '#text',
     parseAttributeValue: true,
     removeNSPrefix: true,
-    allowBooleanAttributes: true
+    allowBooleanAttributes: true,
+    processEntities: { enabled: true }
   }
 
   const fetchAndParse = async (url) => {
