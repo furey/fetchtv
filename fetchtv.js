@@ -30,7 +30,6 @@ let argv = {}
 let activeMultiBar = null
 let isShuttingDown = false
 let progressBarActive = false
-const requestCache = new Map()
 const activeLockFiles = new Set()
 
 const BROWSE_RETRIES = 3
@@ -855,9 +854,6 @@ const createBrowsePayload = ({ serviceType, objectId, requestedCount = 0 }) => `
 const browseRequest = async ({ apiService, objectId = '0' }) => {
   const { cd_ctr: controlUrl, cd_service: serviceType } = apiService
 
-  const cacheKey = `${objectId}`
-  if (requestCache.has(cacheKey)) return requestCache.get(cacheKey)
-
   const payload = createBrowsePayload({ serviceType, objectId })
   const headers = {
     'Content-Type': 'text/xmlcharset="utf-8"',
@@ -899,7 +895,6 @@ const browseRequest = async ({ apiService, objectId = '0' }) => {
 
       debug('Browse Response DIDL-Lite (ObjectID: %s, Attempt: %d): %O', objectId, attempt, resultXml['DIDL-Lite'])
 
-      requestCache.set(cacheKey, resultXml['DIDL-Lite'])
       return resultXml['DIDL-Lite']
 
     } catch (err) {
@@ -1780,5 +1775,4 @@ export {
   createRequestManager,
   saveRecordings,
   httpClient,
-  requestCache,
 }
