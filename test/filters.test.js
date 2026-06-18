@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import nock from 'nock'
 
-import { getFetchRecordings, requestCache } from '../fetchtv.js'
+import { getFetchRecordings } from '../fetchtv.js'
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const readFixture = (name) => readFileSync(path.join(fixturesDir, name), 'utf-8')
@@ -50,7 +50,6 @@ const interceptBrowse = () => {
 }
 
 beforeEach(() => {
-  requestCache.clear()
   nock.cleanAll()
   interceptBrowse()
 })
