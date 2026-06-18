@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import nock from 'nock'
 
-import { findItems, findDirectories, requestCache } from '../fetchtv.js'
+import { findItems, findDirectories, browseRequest } from '../fetchtv.js'
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const readFixture = (name) => readFileSync(path.join(fixturesDir, name), 'utf-8')
@@ -17,7 +17,6 @@ const SERVICE_TYPE = 'urn:schemas-upnp-org:service:ContentDirectory:1'
 const apiService = { cd_ctr: `${HOST}${CONTROL_PATH}`, cd_service: SERVICE_TYPE }
 
 beforeEach(() => {
-  requestCache.clear()
   nock.cleanAll()
 })
 
@@ -85,4 +84,14 @@ test('findItems: returns size as integer from res @size attribute', async () => 
   const items = await findItems({ apiService, objectId: 'items-i', showTitle: 'Bluey' })
   assert.equal(items[0].size, 1073741824)
   assert.equal(typeof items[0].size, 'number')
+})
+
+test('browseRequest: never caches across calls so long-lived consumers see fresh data', async () => {
+  nock(HOST).post(CONTROL_PATH).reply(200, readFixture('browse-recordings.xml'))
+  const first = await browseRequest({ apiService, objectId: '1' })
+
+  nock(HOST).post(CONTROL_PATH).reply(200, readFixture('browse-root.xml'))
+  const second = await browseRequest({ apiService, objectId: '1' })
+
+  assert.notDeepEqual(first, second)
 })
