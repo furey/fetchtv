@@ -996,7 +996,7 @@ const browseRequest = async ({ apiService, objectId = '0' }) => {
       }
 
       const resultXml = parseXml(resultText)
-      if (!resultXml || !resultXml['DIDL-Lite']) {
+      if (!resultXml || !('DIDL-Lite' in resultXml)) {
         if (attempt > 1) logWarning(`Failed to parse embedded DIDL-Lite XML for ObjectID ${objectId} on attempt ${attempt-1}`)
         lastError = new Error('Failed to parse embedded DIDL-Lite XML')
         continue
@@ -1004,7 +1004,7 @@ const browseRequest = async ({ apiService, objectId = '0' }) => {
 
       debug('Browse Response DIDL-Lite (ObjectID: %s, Attempt: %d): %O', objectId, attempt, resultXml['DIDL-Lite'])
 
-      return resultXml['DIDL-Lite']
+      return resultXml['DIDL-Lite'] || {}
 
     } catch (err) {
       lastError = err
