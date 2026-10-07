@@ -337,3 +337,67 @@ test('CLI: --help documents --concurrency', async () => {
   const { stdout } = await runCli(['--help'])
   assert.match(stdout, /--concurrency/)
 })
+
+const PLEX_TEMPLATE = '${show_title}/Season ${season_number}/${show_title} - S${season_number}E${episode_number_padded}.${ext}'
+
+const makeBareItem = ({ id, title, route = '/full', ...rest }) => ({
+  id,
+  title,
+  url: `${baseUrl}${route}`,
+  size: BODY.length,
+  ext: 'ts',
+  item_type: 'movie',
+  ...rest,
+})
+
+test('naming: an item with no season or episode falls back to the default name under --for-plex', async () => {
+  const film = makeBareItem({ id: '30', title: 'Some Film' })
+  const episode = makeItem({ id: '31', route: '/full' })
+  const { result, lines } = await silenceConsole(() =>
+    saveRecordings({
+      recordings: makeRecordings([film, episode]),
+      savePath: tmpDir,
+      template: PLEX_TEMPLATE,
+      retryDelays: NO_RETRIES,
+    }))
+
+  assert.deepEqual(result.map(entry => entry.status), ['saved', 'saved'])
+  assert.ok((await fs.readFile(path.join(tmpDir, 'Bluey', 'Some Film.ts'))).equals(BODY))
+  assert.ok((await fs.readFile(path.join(tmpDir, 'Bluey', 'Season 1', 'Bluey - S1E31.ts'))).equals(BODY))
+  const warnings = lines.filter(line => line.includes('without a matching value'))
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /Using the default name for Some Film\./)
+})
+
+test('naming: season and episode from parentTaskName prefix the default filename', async () => {
+  const item = makeBareItem({
+    id: '32',
+    title: 'Episode 8 - Tue 18 Feb',
+    item_type: 'episode',
+    season_number: '20',
+    season_number_padded: '20',
+    episode_number: '8',
+    episode_number_padded: '08',
+  })
+  await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  const saved = path.join(tmpDir, 'Bluey', 'S20E08 - Episode 8 - Tue 18 Feb.ts')
+  assert.ok((await fs.readFile(saved)).equals(BODY))
+})
+
+test('naming: a title that already has an SxxEyy pattern is not prefixed', async () => {
+  const item = makeBareItem({
+    id: '33',
+    title: 'S20 E8 - Episode 8',
+    item_type: 'episode',
+    season_number: '20',
+    season_number_padded: '20',
+    episode_number: '8',
+    episode_number_padded: '08',
+  })
+  await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.ok((await fs.readFile(path.join(tmpDir, 'Bluey', 'S20 E8 - Episode 8.ts'))).equals(BODY))
+})
