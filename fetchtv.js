@@ -630,8 +630,10 @@ const printRecordings = ({ recordings, jsonOutput, showsOnly }) => {
   const context = showsOnly ? 'Shows' : 'Recordings'
   logHeading(`Listing ${context}`)
 
-  if (!sortedRecordings || sortedRecordings.length === 0)
-    return logWarning(`No ${context} found matching criteria!`)
+  if (!sortedRecordings || sortedRecordings.length === 0) {
+    logWarning(`No ${context} found matching criteria!`)
+    return logWarning('A Fetch box whose account is cancelled shows its setup screen on the TV and lists no recordings.')
+  }
 
   sortedRecordings.forEach(recording => {
     const bullet = showsOnly ? '' : '📁 '
