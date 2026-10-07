@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import os from 'os'
 import fsc from 'fs'
 import ora from 'ora'
 import _ from 'lodash'
@@ -47,7 +46,11 @@ const INITIAL_BROWSE_CONCURRENCY = 3
 const SAVE_FILE_NAME = 'fetchtv.json'
 const MAX_OCTET_RECORDING = 4398046510080
 const FETCH_MANUFACTURER_URL = 'http://www.fetch.com/'
-const MAX_CONCURRENT_DOWNLOADS = Math.min(os.cpus().length, 10)
+const SIZE_TOLERANCE = 1024
+const MIN_CONCURRENT_DOWNLOADS = 1
+const MAX_CONCURRENT_DOWNLOADS = 10
+const DEFAULT_CONCURRENT_DOWNLOADS = 2
+const DOWNLOAD_RETRY_DELAYS = [5000, 15000]
 const UPNP_CONTENT_DIRECTORY_URN = 'urn:schemas-upnp-org:service:ContentDirectory:1'
 
 const REQUEST_QUEUE_PRIORITY = {
@@ -55,6 +58,14 @@ const REQUEST_QUEUE_PRIORITY = {
   SHOWS_FOLDER: 1,
   SHOW: 2,
   RECORDING_CHECK: 3
+}
+
+const SAVE_STATUS = {
+  SAVED: 'saved',
+  ALREADY_SAVED: 'already_saved',
+  STILL_RECORDING: 'still_recording',
+  LOCKED: 'locked',
+  FAILED: 'failed'
 }
 
 const httpClient = axios.create({
@@ -86,8 +97,13 @@ const main = async () => {
     .option('template', { type: 'string', description: 'Template for save path/filename structure (uses --save as base path)'})
     .option('for-plex', { type: 'boolean', default: false, description: 'Use Plex-compatible template for saving recordings (overrides --template)' })
     .option('overwrite', { type: 'boolean', default: false, description: 'Overwrite existing files when saving' })
+    .option('concurrency', { type: 'number', default: DEFAULT_CONCURRENT_DOWNLOADS, description: `Number of recordings to save at the same time (${MIN_CONCURRENT_DOWNLOADS}-${MAX_CONCURRENT_DOWNLOADS})` })
     .option('json', { type: 'boolean', default: false, description: 'Output show/recording/save results in JSON' })
     .option('debug', { type: 'boolean', default: false, description: 'Enable verbose logging for debugging'})
+    .check(argv => {
+      if (isValidConcurrency(argv.concurrency)) return true
+      throw new Error(`--concurrency must be a whole number from ${MIN_CONCURRENT_DOWNLOADS} to ${MAX_CONCURRENT_DOWNLOADS}.`)
+    })
     .help()
     .alias('h', 'help')
     .alias('s', 'show')
@@ -156,6 +172,7 @@ const main = async () => {
         savePath: path.resolve(argv.save),
         template: effectiveTemplate,
         overwrite: argv.overwrite,
+        concurrency: argv.concurrency,
         jsonOutput: argv.json
       })
     }
@@ -336,7 +353,14 @@ const getFetchRecordings = async ({ location, filters }) => {
   return results
 }
 
-const saveRecordings = async ({ recordings, savePath, template, overwrite }) => {
+const saveRecordings = async ({
+  recordings,
+  savePath,
+  template,
+  overwrite,
+  concurrency = DEFAULT_CONCURRENT_DOWNLOADS,
+  retryDelays = DOWNLOAD_RETRY_DELAYS
+}) => {
   const savedFilesDb = await loadSavedFiles(savePath)
   const jsonResults = []
   const tasks = []
@@ -392,36 +416,29 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
 
       if (lockStillExistsAfterCheck) {
         log(chalk.gray(`Skipping ${item.title} (lock file exists or failed to remove stale lock).`))
-        if (argv.json) jsonResults.push({
+        jsonResults.push({
           item: formatItem(item),
           recorded: false,
+          status: SAVE_STATUS.LOCKED,
           warning: 'Skipped (lock file active or stale lock removal failed)'
         })
         continue
       }
 
-      const isCompletedFile = savedFilesDb[item.id] && !overwrite
-      let hasPartialFile = false
-      try {
-        if (fsc.existsSync(filePath) && (!savedFilesDb[item.id] || overwrite)) {
-          const stats = await fs.stat(filePath)
-          hasPartialFile = item.size > 0 && stats.size < item.size
+      const savedEntry = savedFilesDb[item.id]
+      if (savedEntry && !overwrite) {
+        const isComplete = await isSavedFileComplete({ filePath, savedEntry, item })
+        if (isComplete) {
+          log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
+          jsonResults.push({
+            item: formatItem(item),
+            recorded: false,
+            status: SAVE_STATUS.ALREADY_SAVED,
+            warning: 'Skipped (already saved and complete)'
+          })
+          continue
         }
-      } catch (err) {
-        if (err.code !== 'ENOENT') {
-          debug('Error checking for partial file %s: %O', filePath, err)
-        }
-        hasPartialFile = false
-      }
-
-      if (isCompletedFile && !hasPartialFile) {
-        log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
-        if (argv.json) jsonResults.push({
-          item: formatItem(item),
-          recorded: false,
-          warning: 'Skipped (already saved and not partial)'
-        })
-        continue
+        log(chalk.yellow(`Saved file is missing or incomplete, saving again: ${show.title} / ${item.title}`))
       }
 
       tasks.push({ item, filePath, showDirPath, showTitle: show.title })
@@ -453,12 +470,13 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
       jsonResults.push({
         item: formatItem(task.item),
         recorded: false,
+        status: SAVE_STATUS.FAILED,
         error: `Directory creation failed: ${mkdirErr.message}`
       })
       continue
     }
 
-    while (activePromises.size >= MAX_CONCURRENT_DOWNLOADS) {
+    while (activePromises.size >= concurrency) {
       await Promise.race(activePromises)
     }
 
@@ -472,20 +490,22 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
 
     progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {pbValue}/{pbTotal} | {speed}/s | ETA: {pbETA}`
 
-    const promise = downloadFile({ item: task.item, filePath: task.filePath, progressBar, overwrite })
+    const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays })
       .then(async (downloadResult) => {
         const resultEntry = {
           item: formatItem(task.item),
           recorded: downloadResult.recorded,
-          resumed: downloadResult.resumed || false
+          resumed: downloadResult.resumed || false,
+          status: getDownloadStatus(downloadResult)
         }
 
+        if (downloadResult.attempts > 1) resultEntry.attempts = downloadResult.attempts
         if (downloadResult.warning) resultEntry.warning = downloadResult.warning
         if (downloadResult.error) resultEntry.error = downloadResult.error
         jsonResults.push(resultEntry)
 
         if (downloadResult.recorded) {
-          await addSavedFile({ savePath, savedFilesDb, item: task.item })
+          await addSavedFile({ savePath, savedFilesDb, item: task.item, size: downloadResult.size })
         }
       })
       .catch((error) => {
@@ -493,6 +513,7 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
         jsonResults.push({
           item: formatItem(task.item),
           recorded: false,
+          status: SAVE_STATUS.FAILED,
           error: `Processing error: ${error.message}`
         })
 
@@ -529,6 +550,45 @@ const saveRecordings = async ({ recordings, savePath, template, overwrite }) => 
 
   return jsonResults
 }
+
+const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite, retryDelays = DOWNLOAD_RETRY_DELAYS }) => {
+  const maxAttempts = retryDelays.length + 1
+  let result = await downloadFile({ item, filePath, progressBar, overwrite })
+  let attempts = 1
+
+  while (result.retryable && attempts < maxAttempts && !isShuttingDown) {
+    const delay = retryDelays[attempts - 1]
+    attempts++
+    log(chalk.yellow(`Retrying ${item.title} in ${formatSeconds(delay)} (attempt ${attempts} of ${maxAttempts})…`))
+    await new Promise(resolve => setTimeout(resolve, delay))
+    result = await downloadFile({ item, filePath, progressBar, overwrite: false })
+  }
+
+  return { ...result, attempts }
+}
+
+const getDownloadStatus = (downloadResult) => {
+  if (downloadResult.recorded) return SAVE_STATUS.SAVED
+  if (downloadResult.stillRecording) return SAVE_STATUS.STILL_RECORDING
+  if (downloadResult.locked) return SAVE_STATUS.LOCKED
+  return SAVE_STATUS.FAILED
+}
+
+const isSavedFileComplete = async ({ filePath, savedEntry, item }) => {
+  try {
+    const stats = await fs.stat(filePath)
+    const expectedSizes = [getSavedEntrySize(savedEntry), item.size].filter(isPositiveSize)
+    return expectedSizes.every(expectedSize => stats.size >= expectedSize - SIZE_TOLERANCE)
+  } catch (err) {
+    if (err.code !== 'ENOENT') debug('Error checking saved file %s: %O', filePath, err)
+    return false
+  }
+}
+
+const getSavedEntrySize = (savedEntry) =>
+  typeof savedEntry === 'object' && savedEntry !== null ? savedEntry.size : undefined
+
+const isPositiveSize = (size) => Number.isFinite(size) && size > 0
 
 const printInfo = (fetchServer) => {
   const table = new Table({ head: [chalk.cyan('Field'), chalk.cyan('Value')] })
@@ -581,7 +641,7 @@ const printRecordings = ({ recordings, jsonOutput, showsOnly }) => {
   })
 }
 
-const handleSaveAction = async ({ recordings, savePath, template, overwrite, jsonOutput }) => {
+const handleSaveAction = async ({ recordings, savePath, template, overwrite, concurrency, jsonOutput, retryDelays }) => {
   logHeading('Saving Recordings')
 
   try {
@@ -600,19 +660,60 @@ const handleSaveAction = async ({ recordings, savePath, template, overwrite, jso
       }
     }
 
-    const jsonResult = await saveRecordings({ recordings, savePath, template, overwrite })
+    const results = await saveRecordings({ recordings, savePath, template, overwrite, concurrency, retryDelays })
+    const summary = summariseSaveResults(results)
 
-    if (!jsonOutput) return
+    if (summary.failed > 0) process.exitCode = 1
 
-    logHeading('Start JSON Output', 'greenBright')
-    console.log(JSON.stringify(jsonResult, null, 2))
-    logHeading('End JSON Output', 'greenBright')
+    if (jsonOutput) {
+      logHeading('Start JSON Output', 'greenBright')
+      console.log(JSON.stringify({ summary, results }, null, 2))
+      logHeading('End JSON Output', 'greenBright')
+    }
+
+    const summaryLine = formatSaveSummary(summary)
+    if (summary.remaining > 0) logWarning(summaryLine)
+    else log(chalk.green(summaryLine))
+
+    return summary
   } catch (saveError) {
     logError(`Error during save process: ${saveError.message}`)
     if (argv.debug) console.error(saveError.stack)
     process.exit(1)
   }
 }
+
+const summariseSaveResults = (results) => {
+  const countStatus = (status) => results.filter(result => result.status === status).length
+  const summary = {
+    total: results.length,
+    saved: countStatus(SAVE_STATUS.SAVED),
+    alreadySaved: countStatus(SAVE_STATUS.ALREADY_SAVED),
+    failed: countStatus(SAVE_STATUS.FAILED),
+    stillRecording: countStatus(SAVE_STATUS.STILL_RECORDING),
+    locked: countStatus(SAVE_STATUS.LOCKED)
+  }
+  return { ...summary, remaining: summary.failed + summary.stillRecording + summary.locked }
+}
+
+const formatSaveSummary = ({ total, saved, alreadySaved, failed, stillRecording, locked, remaining }) => {
+  const savedPart = alreadySaved > 0
+    ? `Saved ${saved} of ${total}, ${alreadySaved} already saved.`
+    : `Saved ${saved} of ${total}.`
+  const leftParts = [
+    failed > 0 && `${failed} failed`,
+    stillRecording > 0 && `${stillRecording} still recording`,
+    locked > 0 && `${locked} in use by another save`
+  ].filter(Boolean)
+
+  if (remaining === 0) return savedPart
+  return `${savedPart} ${leftParts.join(', ')}. Run the same command again to finish the remaining ${remaining}.`
+}
+
+const isValidConcurrency = (value) =>
+  Number.isInteger(value) && value >= MIN_CONCURRENT_DOWNLOADS && value <= MAX_CONCURRENT_DOWNLOADS
+
+const formatSeconds = (ms) => `${Math.round(ms / 1000)} s`
 
 const trackLockFile = (lockPath) => {
   activeLockFiles.add(lockPath)
@@ -1054,8 +1155,8 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
   // (Fetch TV's "-1" sentinel for in-progress recordings) — the stream would
   // serve truncated bytes and we'd silently end up with an incomplete file.
   if (!Number.isFinite(item.size) || item.size <= 0) {
-    logWarning(`Skipping ${item.title}, size is non-positive (${item.size}) — likely still recording.`)
-    return { recorded: false, warning: `Skipping item, size ${item.size} indicates it's currently recording` }
+    logWarning(`Skipping ${item.title}, size is non-positive (${item.size}), likely still recording.`)
+    return { recorded: false, stillRecording: true, warning: `Skipping item, size ${item.size} indicates it's currently recording` }
   }
 
   const lockFilePath = `${filePath}${CONST_LOCK}`
@@ -1112,7 +1213,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
         } else {
           logError(`Active lock file found for ${item.title}. Aborting download.`)
           if (progressBar) progressBar.stop()
-          return { recorded: false, error: 'Active lock file found, download aborted.' }
+          return { recorded: false, locked: true, error: 'Active lock file found, download aborted.' }
         }
       }
       fsc.writeFileSync(lockFilePath, '')
@@ -1193,7 +1294,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       }
 
       if (progressBar) progressBar.stop()
-      return { recorded: false, warning: 'Skipping item, size indicates it\'s currently recording' }
+      return { recorded: false, stillRecording: true, warning: 'Skipping item, size indicates it\'s currently recording' }
     }
 
     if (totalLength === 0 && !isResuming) {
@@ -1232,6 +1333,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
     }
 
     let downloadedLength = existingSize
+    let hasStreamFailed = false
     let lastUpdateTime = progressBar?.startTime || Date.now()
     const PROGRESS_UPDATE_INTERVAL = 250
 
@@ -1274,73 +1376,55 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
           debug('Write stream finished during shutdown for %s', item.title)
           return
         }
-        debug('Write stream finished successfully for %s', item.title)
-        if (progressBar) progressBar.update(progressBar.getTotal())
+        if (hasStreamFailed) return
+        debug('Write stream finished for %s', item.title)
         if (progressBar) progressBar.stop()
 
         await new Promise(resolve => setTimeout(resolve, 150))
+
+        const lockWarning = removeLockFileAfterDownload({ item, lockFilePath })
+        const expectedSize = Math.max(totalLength, isPositiveSize(item.size) ? item.size : 0)
 
         let finalSize = -1
         try {
           const finalStats = await fs.stat(filePath)
           finalSize = finalStats.size
-          debug('Final file size for %s: %d bytes', item.title, finalSize)
-
-          try {
-            if (fsc.existsSync(lockFilePath)) {
-              fsc.unlinkSync(lockFilePath)
-              untrackLockFile(lockFilePath)
-              debug('Removed lock file after successful save: %s', lockFilePath)
-            }
-          } catch (unlinkErr) {
-            logWarning(`Could not remove lock file after successful save for ${item.title}: ${unlinkErr.message}`)
-            resolve({
-              recorded: true,
-              resumed: isResuming,
-              warning: `Save complete, but failed to remove lock file: ${unlinkErr.message}`
-            })
-            return
-          }
-
-          if (totalLength > 0 && finalSize !== totalLength) {
-            const sizeDiff = Math.abs(finalSize - totalLength)
-            const tolerance = 1024
-            if (sizeDiff > tolerance) {
-              logWarning(`Warning for ${item.title}: Final file size (${filesize(finalSize, { spacer: '' })}) doesn't match expected size (${filesize(totalLength)}) by ${filesize(sizeDiff, { spacer: '' })}.`)
-              resolve({
-                recorded: true,
-                resumed: isResuming,
-                warning: `File size mismatch: final=${filesize(finalSize, { spacer: '' })}, expected=${filesize(totalLength, { spacer: '' })}`
-              })
-            } else {
-              debug('Final file size is within tolerance of expected size.')
-              resolve({ recorded: true, resumed: isResuming })
-            }
-          } else if (totalLength === 0 && finalSize > 0) {
-            debug('Original content length was 0, but final size is %s. Treating as success.', filesize(finalSize, { spacer: '' }))
-            resolve({ recorded: true, resumed: isResuming })
-          } else {
-            debug('Final file size matches expected size.')
-            resolve({ recorded: true, resumed: isResuming })
-          }
+          debug('Final file size for %s: %d bytes (expected %d)', item.title, finalSize, expectedSize)
         } catch (verifyErr) {
           logError(`Error verifying final file size for ${item.title}: ${verifyErr.message}`)
           debug('File size verification error details: %O', verifyErr)
-          try {
-            if (fsc.existsSync(lockFilePath)) {
-              fsc.unlinkSync(lockFilePath)
-              untrackLockFile(lockFilePath)
-              debug('Removed lock file after verification error.')
-            }
-          } catch (unlinkErr) {
-            logWarning(`Could not remove lock file after verification error for ${item.title}: ${unlinkErr.message}`)
-          }
           resolve({
-            recorded: true,
+            recorded: false,
             resumed: isResuming,
+            retryable: true,
             warning: `Write finished, but failed to verify final size: ${verifyErr.message}`
           })
+          return
         }
+
+        const sizeDiff = Math.abs(finalSize - expectedSize)
+        if (expectedSize > 0 && sizeDiff > SIZE_TOLERANCE) {
+          const sizeWarning = `File size mismatch: final=${filesize(finalSize, { spacer: '' })}, expected=${filesize(expectedSize, { spacer: '' })}`
+          logWarning(`${item.title} is incomplete. ${sizeWarning}. Partial file kept for resume.`)
+          resolve({
+            recorded: false,
+            resumed: isResuming,
+            retryable: finalSize < expectedSize,
+            warning: sizeWarning
+          })
+          return
+        }
+
+        if (expectedSize === 0 && finalSize <= 0) {
+          logWarning(`${item.title} finished with an empty file.`)
+          resolve({ recorded: false, resumed: isResuming, retryable: true, warning: 'Download finished with an empty file' })
+          return
+        }
+
+        if (progressBar) progressBar.update(progressBar.getTotal())
+        const successResult = { recorded: true, resumed: isResuming, size: finalSize }
+        if (lockWarning) successResult.warning = lockWarning
+        resolve(successResult)
       })
 
       writer.on('error', (err) => {
@@ -1375,9 +1459,8 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
           debug('Response stream error during shutdown for %s: %s', item.title, err.message)
           return
         }
+        hasStreamFailed = true
         const completionPercentage = totalLength > 0 ? Math.min(100, (downloadedLength / totalLength) * 100) : 0
-        const isEffectivelyComplete = completionPercentage >= 99.9
-        const isNearlyComplete = completionPercentage > 98
         debug('Response Stream Error Details (%s): Code: %s, Message: %s', item.title, err.code, err.message)
 
         if (progressBar) {
@@ -1385,56 +1468,27 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
           progressBar.stop()
         }
 
+        const interruptedWarning = describeInterruption({ item, err, completionPercentage })
+        const interruptedResult = {
+          recorded: false,
+          resumed: isResuming,
+          retryable: true,
+          warning: `${interruptedWarning} Partial file kept for resume.`
+        }
+
+        const finishInterrupted = () => {
+          removeLockFileAfterDownload({ item, lockFilePath })
+          logError(interruptedResult.warning)
+          resolve(interruptedResult)
+        }
+
         if (writer && !writer.closed) {
           writer.end(() => {
             debug('Writer stream closed after response stream error for %s.', item.title)
-
-            try {
-              if (fsc.existsSync(lockFilePath)) {
-                fsc.unlinkSync(lockFilePath)
-                untrackLockFile(lockFilePath)
-                debug('Removed lock file after response stream error.')
-              }
-            } catch (cleanupErr) {
-              logWarning(`Lock file cleanup failed after response stream error: ${cleanupErr.message}`)
-            }
-
-            const isECONNRESET = err.code === 'ECONNRESET'
-            const isTimeout = err.code === 'ECONNABORTED' || (err.message && err.message.toLowerCase().includes('timeout'))
-            const isPrematureClose = err.message && err.message.includes('Premature close')
-
-            if (isEffectivelyComplete && (isECONNRESET || isPrematureClose)) {
-              debug('File download complete despite connection reset/close. Treating as success.')
-              resolve({ recorded: true, resumed: isResuming })
-              return
-            }
-
-            let warningMessage = `Download interrupted for ${item.title} at ${completionPercentage.toFixed(1)}%.`
-            if (isECONNRESET) warningMessage += ' (Connection reset)'
-            else if (isTimeout) warningMessage += ' (Timeout)'
-            else if (isPrematureClose) warningMessage += ' (Premature close)'
-            else warningMessage += ` (Error: ${err.message})`
-
-            if (isNearlyComplete) {
-              logWarning(`${warningMessage} - File may be usable.`)
-              resolve({ recorded: false, resumed: isResuming, warning: `${warningMessage} - File may be usable.` })
-            } else {
-              logError(`${warningMessage} - Will attempt resume on next run.`)
-              resolve({ recorded: false, resumed: isResuming, warning: `${warningMessage} - Can be resumed.` })
-            }
+            finishInterrupted()
           })
         } else {
-          try {
-            if (fsc.existsSync(lockFilePath)) {
-              fsc.unlinkSync(lockFilePath)
-              untrackLockFile(lockFilePath)
-              debug('Removed lock file after response stream error (writer already closed).')
-            }
-          } catch (cleanupErr) {
-            logWarning(`Lock file cleanup failed after response stream error (writer already closed): ${cleanupErr.message}`)
-          }
-          logError(`Download interrupted for ${item.title} (Error: ${err.message}) - Will attempt resume.`)
-          resolve({ recorded: false, resumed: isResuming, warning: `Download interrupted (${err.message}) - Can be resumed.` })
+          finishInterrupted()
         }
       })
 
@@ -1465,7 +1519,29 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       logWarning(`Could not clean up lock file in outer catch block: ${cleanupErr.message}`)
     }
 
-    return { recorded: false, error: `Download initiation failed: ${error.message}` }
+    return { recorded: false, retryable: !error.response, error: `Download initiation failed: ${error.message}` }
+  }
+}
+
+const describeInterruption = ({ item, err, completionPercentage }) => {
+  const message = `Download interrupted for ${item.title} at ${completionPercentage.toFixed(1)}%.`
+  if (err.code === 'ECONNRESET') return `${message} (Connection reset)`
+  if (err.code === 'ECONNABORTED' || err.message?.toLowerCase().includes('timeout')) return `${message} (Timeout)`
+  if (err.message?.includes('Premature close')) return `${message} (Premature close)`
+  return `${message} (Error: ${err.message})`
+}
+
+const removeLockFileAfterDownload = ({ item, lockFilePath }) => {
+  try {
+    if (fsc.existsSync(lockFilePath)) {
+      fsc.unlinkSync(lockFilePath)
+      untrackLockFile(lockFilePath)
+      debug('Removed lock file after download: %s', lockFilePath)
+    }
+    return null
+  } catch (unlinkErr) {
+    logWarning(`Could not remove lock file for ${item.title}: ${unlinkErr.message}`)
+    return `Save complete, but failed to remove lock file: ${unlinkErr.message}`
   }
 }
 
@@ -1639,8 +1715,11 @@ const loadSavedFiles = async (savePath) => {
   }
 }
 
-const addSavedFile = async ({ savePath, savedFilesDb, item }) => {
-  savedFilesDb[item.id] = item.title
+const addSavedFile = async ({ savePath, savedFilesDb, item, size }) => {
+  const savedSize = isPositiveSize(size) ? size : item.size
+  savedFilesDb[item.id] = isPositiveSize(savedSize)
+    ? { title: item.title, size: savedSize }
+    : { title: item.title }
   const filePath = path.join(savePath, SAVE_FILE_NAME)
   try {
     await fs.mkdir(savePath, { recursive: true })
@@ -1774,5 +1853,8 @@ export {
   addSavedFile,
   createRequestManager,
   saveRecordings,
+  handleSaveAction,
+  summariseSaveResults,
+  formatSaveSummary,
   httpClient,
 }
