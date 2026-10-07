@@ -51,8 +51,8 @@ test('addSavedFile: persists an entry keyed by item id', async () => {
   await addSavedFile({ savePath: tmpDir, savedFilesDb: db, item: { id: '200', title: 'S2 E4' } })
 
   const raw = await fs.readFile(path.join(tmpDir, 'fetchtv.json'), 'utf-8')
-  assert.deepEqual(JSON.parse(raw), { '200': 'S2 E4' })
-  assert.equal(db['200'], 'S2 E4')
+  assert.deepEqual(JSON.parse(raw), { '200': { title: 'S2 E4' } })
+  assert.deepEqual(db['200'], { title: 'S2 E4' })
 })
 
 test('addSavedFile: creates the save directory if it does not exist', async () => {
@@ -61,7 +61,7 @@ test('addSavedFile: creates the save directory if it does not exist', async () =
   await addSavedFile({ savePath: nested, savedFilesDb: db, item: { id: '300', title: 'X' } })
 
   const raw = await fs.readFile(path.join(nested, 'fetchtv.json'), 'utf-8')
-  assert.deepEqual(JSON.parse(raw), { '300': 'X' })
+  assert.deepEqual(JSON.parse(raw), { '300': { title: 'X' } })
 })
 
 test('isLockFileStale: returns true when lock file is missing', async () => {
@@ -124,7 +124,7 @@ test('saveRecordings: writes downloaded files to disk and updates fetchtv.json',
   assert.equal(written.length, payload.length)
 
   const dbRaw = await fs.readFile(path.join(tmpDir, 'fetchtv.json'), 'utf-8')
-  assert.deepEqual(JSON.parse(dbRaw), { '900': 'S1 E5 - Pool' })
+  assert.deepEqual(JSON.parse(dbRaw), { '900': { title: 'S1 E5 - Pool', size: payload.length } })
 
   assert.ok(results.find(r => r.recorded === true), 'expected at least one recorded result')
 })
@@ -159,7 +159,8 @@ test('saveRecordings: skips items already present in fetchtv.json', async () => 
     overwrite: false,
   })
 
-  assert.equal(results.length, 0, 'no download tasks should be created for already-saved items')
+  assert.equal(results.length, 1)
+  assert.equal(results[0].status, 'already_saved')
 })
 
 test('downloadFile: refuses to download items with non-positive size', async () => {

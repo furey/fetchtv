@@ -21,6 +21,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Usage](#usage)
 - [Template Variables](#template-variables)
 - [Examples](#examples)
+- [Interrupted Saves](#interrupted-saves)
 - [Programmatic API](#programmatic-api)
 - [Tests](#tests)
 - [GitHub Workflows](#github-workflows)
@@ -238,6 +239,7 @@ fetchtv <COMMAND> [OPTIONS]
 | `--template`     |       | `string`  | Template for save path/filename structure (uses --save as base path)            |
 | `--for-plex`     |       | `boolean` | Uses Plex-compatible template for saving recordings (overrides --template)      |
 | `--overwrite`    | `-o`  | `boolean` | Overwrite existing files when saving                                            |
+| `--concurrency`  |       | `number`  | Number of recordings to save at the same time, `1` to `10` (default: `2`)       |
 | `--json`         | `-j`  | `boolean` | Output show/recording/save results in JSON                                      |
 | `--debug`        | `-d`  | `boolean` | Enable verbose logging for debugging                                            |
 | `--help`         | `-h`  | `boolean` | Show help message                                                               |
@@ -270,6 +272,10 @@ The `--for-plex` option uses a predefined template optimized for Plex media serv
 ```js
 `${show_title}/Season ${season_number}/${show_title} - S${season_number}E${episode_number_padded}.${ext}`
 ```
+
+If a recording has no season or episode number (a film or news bulletin), the template cannot fill its placeholders. FetchTV then saves that recording under the default name (`<show>/<title>.<ext>`), prints a warning, and carries on with the rest.
+
+The default name gets an `SxxEyy -` prefix when the season and episode are known but the title has no `SxxEyy` tag (for example when they come only from the recording's parent task name). Plex and Jellyfin use the prefix to match the episode, for example `Australian Survivor/S10E02 - Episode 2 - Tue 18 Feb.ts`.
 
 #### Example Templates
 
@@ -374,6 +380,22 @@ Save recordings in Plex-compatible path format:
 fetchtv recordings --ip=192.168.86.71 --save=./media --for-plex
 ```
 
+## Interrupted Saves
+
+A save can stop part way: the network drops, the Fetch box resets the connection, or you press `Ctrl+C`. To finish it, run the same command again. `fetchtv` resumes partial files from where they stopped and skips recordings that are already complete.
+
+Each recording gets up to two retries in the same run (after `5 s`, then `15 s`) before `fetchtv` moves on. A recording counts as saved only when the file on disk matches the size the Fetch box reported. `fetchtv.json` in the save folder records each saved recording with its size, so a later run can find a file that is missing or short and save it again.
+
+The last line of a save tells you how many recordings are left:
+
+```text
+Saved 12 of 412, 386 already saved. 9 failed, 5 still recording. Run the same command again to finish the remaining 14.
+```
+
+If any recording failed, `fetchtv` exits with code `1`. With `--json`, the output is an object with a `summary` of these counts and the per-recording `results`.
+
+If saves fail often, try `--concurrency=1` so that only one recording downloads at a time.
+
 ## Programmatic API
 
 In addition to the CLI, `fetchtv.js` can be imported as an ES module by other Node projects that want to drive a Fetch TV box programmatically (e.g. a long-running watcher that mirrors new recordings into a media library).
@@ -414,28 +436,28 @@ await downloadFile({
 })
 ```
 
-| Export                  | Signature                                                                                          | Returns                                                                                                                                                                              |
-| ----------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `discoverFetchServers`  | `({ timeoutMs = 3000 } = {}) => Promise<Server[]>`                                                 | Every Fetch TV device found on the LAN via SSDP. Empty array if none.                                                                                                                |
-| `discoverFetch`         | `({ ip, port }) => Promise<Location \| null>`                                                      | First Fetch TV device matching the given `ip`/`port` (or first found via SSDP if `ip` is omitted), with the full `_rawDeviceXml` payload needed by `getFetchRecordings` and friends. |
-| `getFetchRecordings`    | `({ location, filters }) => Promise<Show[]>`                                                       | Show folders and their items. See example above for `filters` shape.                                                                                                                 |
-| `downloadFile`          | `({ item, filePath, progressBar, overwrite }) => Promise<{ success, filePath, error?, warning? }>` | Streams a recording to disk (supports resume).                                                                                                                                       |
-| `isCurrentlyRecording`  | `(item) => Promise<boolean>`                                                                       | Whether an item is still being recorded (vs. a complete file).                                                                                                                       |
-| `formatItem`            | `(item) => string`                                                                                 | Human-readable description (title, size, duration).                                                                                                                                  |
-| `createValidFilename`   | `(name) => string`                                                                                 | Filesystem-safe version of a string (strips/replaces problematic characters).                                                                                                        |
-| `processPathTemplate`   | `({ template, placeholders }) => string`                                                           | Substitutes `{season}`, `{season_padded}`, `{season_unpadded}` etc. in a path template.                                                                                              |
-| `parseXml`              | `(xmlString) => object \| null`                                                                    | Parses an XML string (SOAP envelopes, MediaServer.xml, etc.) with the same fast-xml-parser options the CLI uses. Returns `null` on empty/invalid input.                              |
-| `parseLocations`        | `(urls) => Promise<Location[]>`                                                                    | Fetches and parses an array of UPnP MediaServer.xml URLs into Location objects. Useful if you have device URLs from somewhere other than SSDP.                                       |
-| `getApiService`         | `(location) => Promise<{ cd_ctr, cd_service } \| null>`                                            | Extracts the ContentDirectory control URL + service URN from a Location. Required to use the lower-level browse helpers below.                                                       |
-| `findDirectories`       | `({ apiService, objectId }) => Promise<Container[]>`                                               | Lists child containers (folders) under a UPnP ObjectID — e.g. enumerate "Recordings" by passing the root's object id.                                                                |
-| `findItems`             | `({ apiService, objectId, showTitle }) => Promise<Item[]>`                                         | Lists items (recordings) under a UPnP container, with season/episode numbers parsed from titles and the file extension inferred from `protocolInfo`.                                 |
-| `browseRequest`         | `({ apiService, objectId }) => Promise<object \| null>`                                            | Raw SOAP Browse, returns the parsed DIDL-Lite payload. Use this if you need attributes neither `findItems` nor `findDirectories` surface.                                            |
-| `saveRecordings`        | `({ recordings, savePath, template, overwrite }) => Promise<Result[]>`                             | Higher-level batch save: takes the output of `getFetchRecordings`, writes each item to disk with resume + lock-file handling, and updates the saved-files DB.                        |
-| `loadSavedFiles`        | `(savePath) => Promise<Record<string, string>>`                                                    | Reads `fetchtv.json` (id → title map of already-saved items) from `savePath`. Returns `{}` if missing or unreadable.                                                                 |
-| `addSavedFile`          | `({ savePath, savedFilesDb, item }) => Promise<void>`                                              | Marks an item as saved by updating `savedFilesDb` in memory and persisting it back to `fetchtv.json`.                                                                                |
-| `tsToSeconds`           | `(timestamp) => number`                                                                            | Parses a `HH:MM:SS` / `MM:SS` / `SS` string into seconds; returns `0` for non-string or malformed input.                                                                             |
-| `processFilter`         | `(arr) => string[]`                                                                                | Normalizes an array of filter strings: splits on commas, trims, lowercases, drops empties. Used to build the `filters` argument for `getFetchRecordings`.                            |
-| `sortRecordingsByTitle` | `(recordings) => Recording[]`                                                                      | Sorts shows alphabetically, ignoring a leading "The " prefix. Returns a deep clone — does not mutate the input.                                                                      |
+| Export                  | Signature                                                                                                            | Returns                                                                                                                                                                                                                                                                 |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `discoverFetchServers`  | `({ timeoutMs = 3000 } = {}) => Promise<Server[]>`                                                                   | Every Fetch TV device found on the LAN via SSDP. Empty array if none.                                                                                                                                                                                                   |
+| `discoverFetch`         | `({ ip, port }) => Promise<Location \| null>`                                                                        | First Fetch TV device matching the given `ip`/`port` (or first found via SSDP if `ip` is omitted), with the full `_rawDeviceXml` payload needed by `getFetchRecordings` and friends.                                                                                    |
+| `getFetchRecordings`    | `({ location, filters }) => Promise<Show[]>`                                                                         | Show folders and their items. See example above for `filters` shape.                                                                                                                                                                                                    |
+| `downloadFile`          | `({ item, filePath, progressBar, overwrite }) => Promise<{ success, filePath, error?, warning? }>`                   | Streams a recording to disk (supports resume).                                                                                                                                                                                                                          |
+| `isCurrentlyRecording`  | `(item) => Promise<boolean>`                                                                                         | Whether an item is still being recorded (vs. a complete file).                                                                                                                                                                                                          |
+| `formatItem`            | `(item) => string`                                                                                                   | Human-readable description (title, size, duration).                                                                                                                                                                                                                     |
+| `createValidFilename`   | `(name) => string`                                                                                                   | Filesystem-safe version of a string (strips/replaces problematic characters).                                                                                                                                                                                           |
+| `processPathTemplate`   | `({ template, placeholders }) => string`                                                                             | Substitutes `{season}`, `{season_padded}`, `{season_unpadded}` etc. in a path template.                                                                                                                                                                                 |
+| `parseXml`              | `(xmlString) => object \| null`                                                                                      | Parses an XML string (SOAP envelopes, MediaServer.xml, etc.) with the same fast-xml-parser options the CLI uses. Returns `null` on empty/invalid input.                                                                                                                 |
+| `parseLocations`        | `(urls) => Promise<Location[]>`                                                                                      | Fetches and parses an array of UPnP MediaServer.xml URLs into Location objects. Useful if you have device URLs from somewhere other than SSDP.                                                                                                                          |
+| `getApiService`         | `(location) => Promise<{ cd_ctr, cd_service } \| null>`                                                              | Extracts the ContentDirectory control URL + service URN from a Location. Required to use the lower-level browse helpers below.                                                                                                                                          |
+| `findDirectories`       | `({ apiService, objectId }) => Promise<Container[]>`                                                                 | Lists child containers (folders) under a UPnP ObjectID — e.g. enumerate "Recordings" by passing the root's object id.                                                                                                                                                   |
+| `findItems`             | `({ apiService, objectId, showTitle }) => Promise<Item[]>`                                                           | Lists items (recordings) under a UPnP container, with season/episode numbers parsed from titles and the file extension inferred from `protocolInfo`.                                                                                                                    |
+| `browseRequest`         | `({ apiService, objectId }) => Promise<object \| null>`                                                              | Raw SOAP Browse, returns the parsed DIDL-Lite payload. Use this if you need attributes neither `findItems` nor `findDirectories` surface.                                                                                                                               |
+| `saveRecordings`        | `({ recordings, savePath, template, overwrite, concurrency = 2, retryDelays = [5000, 15000] }) => Promise<Result[]>` | Higher-level batch save: takes the output of `getFetchRecordings`, writes each item to disk with resume, retry, and lock-file handling, and updates the saved-files DB. Each result has a `status`: `saved`, `already_saved`, `still_recording`, `locked`, or `failed`. |
+| `loadSavedFiles`        | `(savePath) => Promise<Record<string, { title, size? } \| string>>`                                                  | Reads `fetchtv.json` (id → `{ title, size }` of already-saved items; older files map id → title) from `savePath`. Returns `{}` if missing or unreadable.                                                                                                                |
+| `addSavedFile`          | `({ savePath, savedFilesDb, item, size }) => Promise<void>`                                                          | Marks an item as saved with its size by updating `savedFilesDb` in memory and persisting it back to `fetchtv.json`.                                                                                                                                                     |
+| `tsToSeconds`           | `(timestamp) => number`                                                                                              | Parses a `HH:MM:SS` / `MM:SS` / `SS` string into seconds; returns `0` for non-string or malformed input.                                                                                                                                                                |
+| `processFilter`         | `(arr) => string[]`                                                                                                  | Normalizes an array of filter strings: splits on commas, trims, lowercases, drops empties. Used to build the `filters` argument for `getFetchRecordings`.                                                                                                               |
+| `sortRecordingsByTitle` | `(recordings) => Recording[]`                                                                                        | Sorts shows alphabetically, ignoring a leading "The " prefix. Returns a deep clone — does not mutate the input.                                                                                                                                                         |
 
 `isCurrentlyRecording` / `downloadFile` recognise two distinct "still recording" sentinels in the UPnP directory listing: the `4398046510080`-byte marker, and any non-positive size (typically `-1`, used by Fetch TV when a recording has started but its final size isn't known yet). Both cause `downloadFile` to refuse the download — partial bytes from an in-progress recording would otherwise be written out as a truncated file.
 
@@ -454,17 +476,18 @@ npm test
 
 Tests use Node's built-in `node:test` runner (no external framework) and [`nock`](https://github.com/nock/nock) to intercept HTTP. The CLI-level tests in `test/commands.test.js` stand up a local `http.createServer` and spawn `node fetchtv.js --ip 127.0.0.1 --port <random>` against it.
 
-| File                          | What it covers                                                                                                                                      |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `helpers.test.js`             | Pure helpers: filename sanitization, timestamp parsing, filter normalization, "The"-prefix-aware sort, XML node navigation, item projection         |
-| `xml.test.js`                 | `parseXml` against a Browse-shaped fixture with >1000 entity references (regression catch for `fast-xml-parser` entity-expansion cap changes)       |
-| `didl.test.js`                | DIDL-Lite item/container parsing: S/E number extraction, extension inference from `protocolInfo`, size/duration coercion                            |
-| `discovery.test.js`           | `discoverFetch` via explicit `--ip`, including the non-Fetch and unreachable cases                                                                  |
-| `filters.test.js`             | `--show` / `--exclude` / `--title` filter behaviour end-to-end through `getFetchRecordings`                                                         |
-| `recording-detection.test.js` | `isCurrentlyRecording` size sentinels and HEAD/GET fallback paths                                                                                   |
-| `templates.test.js`           | `processPathTemplate`: standard placeholders, Plex template, missing-placeholder throw, traversal sanitization                                      |
-| `save.test.js`                | `loadSavedFiles` / `addSavedFile`, `isLockFileStale`, end-to-end save flow with a mocked download                                                   |
-| `commands.test.js`            | Spawned CLI: `info` / `recordings` / `shows`, prefix-matched commands, `--show` / `--exclude` / `--title`, `--is-recording`, `--json`, `--for-plex` |
+| File                          | What it covers                                                                                                                                                 |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `helpers.test.js`             | Pure helpers: filename sanitization, timestamp parsing, filter normalization, "The"-prefix-aware sort, XML node navigation, item projection                    |
+| `xml.test.js`                 | `parseXml` against a Browse-shaped fixture with >1000 entity references (regression catch for `fast-xml-parser` entity-expansion cap changes)                  |
+| `didl.test.js`                | DIDL-Lite item/container parsing: S/E number extraction, extension inference from `protocolInfo`, size/duration coercion                                       |
+| `discovery.test.js`           | `discoverFetch` via explicit `--ip`, including the non-Fetch and unreachable cases                                                                             |
+| `filters.test.js`             | `--show` / `--exclude` / `--title` filter behaviour end-to-end through `getFetchRecordings`                                                                    |
+| `recording-detection.test.js` | `isCurrentlyRecording` size sentinels and HEAD/GET fallback paths                                                                                              |
+| `templates.test.js`           | `processPathTemplate`: standard placeholders, Plex template, missing-placeholder throw, traversal sanitization                                                 |
+| `save.test.js`                | `loadSavedFiles` / `addSavedFile`, `isLockFileStale`, end-to-end save flow with a mocked download                                                              |
+| `save-reliability.test.js`    | Local HTTP server serving full, short, and reset bodies: size checks, retries with `Range` resume, skip of complete files, final summary line, `--concurrency` |
+| `commands.test.js`            | Spawned CLI: `info` / `recordings` / `shows`, prefix-matched commands, `--show` / `--exclude` / `--title`, `--is-recording`, `--json`, `--for-plex`            |
 
 Tests run locally only — there's no CI gate.
 
