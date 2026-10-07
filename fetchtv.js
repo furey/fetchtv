@@ -381,16 +381,24 @@ const saveRecordings = async ({
         ext: item.ext || 'ts'
       }
 
-      if (template) {
-        const relativePath = processPathTemplate({ templateString: template, data: templateData })
-        filePath = path.resolve(savePath, relativePath)
-        showDirPath = path.dirname(filePath)
-      } else {
+      const defaultFilePath = () => {
         const showDirName = createValidFilename(show.title)
-        showDirPath = path.join(savePath, showDirName)
-        const itemFileName = `${createValidFilename(templateData.recording_title)}.${templateData.ext || 'mpeg'}`
-        filePath = path.join(showDirPath, itemFileName)
+        const itemFileName = `${createValidFilename(buildDefaultFileBase(templateData))}.${templateData.ext || 'mpeg'}`
+        return path.join(savePath, showDirName, itemFileName)
       }
+
+      if (template) {
+        try {
+          const relativePath = processPathTemplate({ templateString: template, data: templateData })
+          filePath = path.resolve(savePath, relativePath)
+        } catch (err) {
+          logWarning(`${err.message} Using the default name for ${item.title}.`)
+          filePath = defaultFilePath()
+        }
+      } else {
+        filePath = defaultFilePath()
+      }
+      showDirPath = path.dirname(filePath)
       const lockFilePath = `${filePath}${CONST_LOCK}`
 
       let lockStillExistsAfterCheck = false
@@ -1740,6 +1748,14 @@ const isLockFileStale = async (lockFilePath) => {
   }
 }
 
+const EPISODE_TAG_PATTERN = /S(?:eason)?\s*\d{1,3}\s*E(?:pisode)?\s*\d{1,3}/i
+
+const buildDefaultFileBase = ({ recording_title, season_number_padded, episode_number_padded }) => {
+  const hasEpisodeNumbers = season_number_padded && episode_number_padded
+  if (!hasEpisodeNumbers || EPISODE_TAG_PATTERN.test(recording_title)) return recording_title
+  return `S${season_number_padded}E${episode_number_padded} - ${recording_title}`
+}
+
 const processPathTemplate = ({ templateString, data }) => {
   debugTemplate('Processing template: %s', templateString)
   debugTemplate('Template data: %O', data)
@@ -1759,7 +1775,6 @@ const processPathTemplate = ({ templateString, data }) => {
   const emptyPlaceholders = Object.keys(placeholders).filter(placeholder => !placeholders[placeholder])
   for (const emptyPlaceholder of emptyPlaceholders) {
     if (processedPath.includes(emptyPlaceholder)) {
-      logWarning(`Template contains placeholder "${emptyPlaceholder}" without a matching value.`)
       throw new Error(`Template contains placeholder "${emptyPlaceholder}" without a matching value.`)
     }
   }

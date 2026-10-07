@@ -273,6 +273,10 @@ The `--for-plex` option uses a predefined template optimized for Plex media serv
 `${show_title}/Season ${season_number}/${show_title} - S${season_number}E${episode_number_padded}.${ext}`
 ```
 
+If a recording has no season or episode number (a film or news bulletin), the template cannot fill its placeholders. FetchTV then saves that recording under the default name (`<show>/<title>.<ext>`), prints a warning, and carries on with the rest.
+
+The default name gets an `SxxEyy -` prefix when the season and episode are known but the title has no `SxxEyy` tag (for example when they come only from the recording's parent task name). Plex and Jellyfin use the prefix to match the episode, for example `Australian Survivor/S10E02 - Episode 2 - Tue 18 Feb.ts`.
+
 #### Example Templates
 
 Save recordings with show folder:
