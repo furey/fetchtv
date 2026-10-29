@@ -364,16 +364,85 @@ test('naming: an item with no season or episode falls back to the default name u
     saveRecordings({
       recordings: makeRecordings([film, episode]),
       savePath: tmpDir,
-      template: PLEX_TEMPLATE,
+      forPlex: true,
       retryDelays: NO_RETRIES,
     }))
 
   assert.deepEqual(result.map(entry => entry.status), ['saved', 'saved'])
   assert.ok((await fs.readFile(path.join(tmpDir, 'Bluey', 'Some Film.ts'))).equals(BODY))
-  assert.ok((await fs.readFile(path.join(tmpDir, 'Bluey', 'Season 1', 'Bluey - S1E31.ts'))).equals(BODY))
-  const warnings = lines.filter(line => line.includes('without a matching value'))
+  assert.ok((await fs.readFile(path.join(tmpDir, 'Bluey', 'Season 01', 'Bluey - S01E31.ts'))).equals(BODY))
+  const warnings = lines.filter(line => line.includes('has no season and episode number'))
   assert.equal(warnings.length, 1)
-  assert.match(warnings[0], /Using the default name for Some Film\./)
+  assert.match(warnings[0], /Using the default name for it\./)
+})
+
+test('naming: a custom template keeps its own season wording', async () => {
+  const episode = makeItem({ id: '34', route: '/full' })
+  await silenceConsole(() =>
+    saveRecordings({
+      recordings: makeRecordings([episode]),
+      savePath: tmpDir,
+      template: PLEX_TEMPLATE,
+      retryDelays: NO_RETRIES,
+    }))
+
+  assert.ok(await exists(path.join(tmpDir, 'Bluey', 'Season 1', 'Bluey - S1E34.ts')))
+})
+
+const saveForPlex = async ({ showTitle = 'Bluey', items }) => silenceConsole(() =>
+  saveRecordings({ recordings: [{ title: showTitle, items }], savePath: tmpDir, forPlex: true, retryDelays: NO_RETRIES }))
+
+const makeFolders = (...folders) => Promise.all(folders.map(folder => fs.mkdir(path.join(tmpDir, folder), { recursive: true })))
+
+test('plex: pads the season folder and the season and episode numbers', async () => {
+  await saveForPlex({ items: [makeItem({ id: '2', route: '/full', title: 'S1 E2 - Hospital' })] })
+
+  assert.ok(await exists(path.join(tmpDir, 'Bluey', 'Season 01', 'Bluey - S01E02.ts')))
+})
+
+test('plex: reuses an existing unpadded season folder', async () => {
+  await makeFolders('Bluey/Season 1')
+  await saveForPlex({ items: [makeItem({ id: '3', route: '/full' })] })
+
+  assert.ok(await exists(path.join(tmpDir, 'Bluey', 'Season 1', 'Bluey - S01E03.ts')))
+  assert.equal(await exists(path.join(tmpDir, 'Bluey', 'Season 01')), false)
+})
+
+test('plex: prefers the padded season folder when both exist', async () => {
+  await makeFolders('Bluey/Season 1', 'Bluey/Season 01')
+  await saveForPlex({ items: [makeItem({ id: '4', route: '/full' })] })
+
+  assert.ok(await exists(path.join(tmpDir, 'Bluey', 'Season 01', 'Bluey - S01E04.ts')))
+})
+
+test('folders: reuses a show folder that differs only in case', async () => {
+  await makeFolders('bluey')
+  await saveForPlex({ items: [makeItem({ id: '5', route: '/full' })] })
+
+  assert.ok(await exists(path.join(tmpDir, 'bluey', 'Season 01', 'bluey - S01E05.ts')))
+})
+
+test('folders: reuses the only year- or country-suffixed show folder', async () => {
+  await makeFolders('Bluey (2018)')
+  await saveForPlex({ items: [makeItem({ id: '6', route: '/full' })] })
+
+  assert.ok(await exists(path.join(tmpDir, 'Bluey (2018)', 'Season 01', 'Bluey (2018) - S01E06.ts')))
+})
+
+test('folders: makes a new show folder when two suffixed folders match', async () => {
+  await makeFolders('The Traitors (AU)', 'The Traitors (US)')
+  await saveForPlex({ showTitle: 'The Traitors', items: [makeItem({ id: '7', route: '/full' })] })
+
+  assert.ok(await exists(path.join(tmpDir, 'The Traitors', 'Season 01', 'The Traitors - S01E07.ts')))
+})
+
+test('folders: the default layout also reuses a matching show folder', async () => {
+  await makeFolders('Bluey (2018)')
+  const item = makeItem({ id: '8', route: '/full' })
+  await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.ok(await exists(path.join(tmpDir, 'Bluey (2018)', `${item.title}.ts`)))
 })
 
 test('naming: season and episode from parentTaskName prefix the default filename', async () => {

@@ -123,20 +123,11 @@ const main = async () => {
     debug('Initial argv state: %O', argv)
   }
 
-  const plexTemplate = '${show_title}/Season ${season_number}/${show_title} - S${season_number}E${episode_number_padded}.${ext}'
-  let effectiveTemplate = argv.template
+  const forPlex = Boolean(argv.forPlex && argv.save)
+  const effectiveTemplate = forPlex ? null : argv.template
 
-  if (argv.forPlex) {
-    if (!argv.save) {
-      logWarning('--for-plex option ignored because --save was not specified.')
-    } else {
-      if (argv.template && argv.template !== plexTemplate) {
-        logWarning(`--for-plex overrides the provided --template option. Using Plex template.`)
-      }
-      effectiveTemplate = plexTemplate
-      debug('Using --for-plex template: %s', effectiveTemplate)
-    }
-  }
+  if (argv.forPlex && !argv.save) logWarning('--for-plex option ignored because --save was not specified.')
+  if (forPlex && argv.template) logWarning('--for-plex overrides the provided --template option. Using the Plex layout.')
 
   logHeading(`Started: ${new Date().toLocaleString()}`)
 
@@ -172,6 +163,7 @@ const main = async () => {
         recordings,
         savePath: path.resolve(argv.save),
         template: effectiveTemplate,
+        forPlex,
         overwrite: argv.overwrite,
         concurrency: argv.concurrency,
         jsonOutput: argv.json
@@ -354,15 +346,76 @@ const getFetchRecordings = async ({ location, filters }) => {
   return results
 }
 
+const plexFilePath = async ({ savePath, showFolder, templateData, listFoldersOf }) => {
+  const { season_number, episode_number, ext } = templateData
+  if (!season_number || !episode_number) return null
+  const season = Number(season_number)
+  const showPath = path.join(savePath, showFolder)
+  const seasonFolder = seasonFolderFor({ season, folders: await listFoldersOf(showPath) })
+  const fileName = `${showFolder} - S${padNumber(season)}E${padNumber(Number(episode_number))}.${ext}`
+  return path.join(showPath, seasonFolder, fileName)
+}
+
+const padNumber = (number) => String(number).padStart(2, '0')
+
+const seasonFolderFor = ({ season, folders }) => {
+  const padded = `Season ${padNumber(season)}`
+  const matching = [...folders].sort().filter(folder => seasonNumberOf(folder) === season)
+  return matching.find(folder => folder === padded) ?? matching[0] ?? padded
+}
+
+const seasonNumberOf = (folderName) => {
+  const match = SEASON_FOLDER_PATTERN.exec(folderName)
+  return match ? Number(match[1]) : null
+}
+
+const SEASON_FOLDER_PATTERN = /^season\s*(\d+)$/i
+
+const existingFolderFor = ({ title, folders }) => {
+  const wanted = createValidFilename(title).toLowerCase()
+  const sorted = [...folders].sort()
+  const exact = sorted.find(folder => folder.toLowerCase() === wanted)
+  if (exact) return exact
+  const suffixed = sorted.filter(folder => isSuffixedFolderOf({ folder, wanted }))
+  return suffixed.length === 1 ? suffixed[0] : undefined
+}
+
+const isSuffixedFolderOf = ({ folder, wanted }) => {
+  const name = folder.toLowerCase()
+  return name.startsWith(`${wanted} `) && YEAR_OR_COUNTRY_SUFFIX.test(name.slice(wanted.length))
+}
+
+const YEAR_OR_COUNTRY_SUFFIX = /^(?: \((?:\d{4}|[a-z]{2,3})\)){1,2}$/
+
+const createFolderLister = () => {
+  const listings = new Map()
+  return (dirPath) => {
+    if (!listings.has(dirPath)) listings.set(dirPath, listFolders(dirPath))
+    return listings.get(dirPath)
+  }
+}
+
+const listFolders = async (dirPath) => {
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true })
+    return entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort()
+  } catch (err) {
+    if (err.code !== 'ENOENT') debug('Could not list folders in %s: %O', dirPath, err)
+    return []
+  }
+}
+
 const saveRecordings = async ({
   recordings,
   savePath,
   template,
+  forPlex = false,
   overwrite,
   concurrency = DEFAULT_CONCURRENT_DOWNLOADS,
   retryDelays = DOWNLOAD_RETRY_DELAYS
 }) => {
   const savedFilesDb = await loadSavedFiles(savePath)
+  const listFoldersOf = createFolderLister()
   const ownerByPath = ownersBySavedPath(savedFilesDb)
   const claimedPaths = new Set()
   const jsonResults = []
@@ -384,14 +437,22 @@ const saveRecordings = async ({
         ext: item.ext || 'ts'
       }
 
+      const showFolder = existingFolderFor({ title: show.title, folders: await listFoldersOf(savePath) })
+        || createValidFilename(show.title)
+
       const defaultFilePath = () => {
-        const showDirName = createValidFilename(show.title)
-        const itemFileName = `${createValidFilename(buildDefaultFileBase(templateData))}.${templateData.ext || 'mpeg'}`
-        return path.join(savePath, showDirName, itemFileName)
+        const itemFileName = `${createValidFilename(buildDefaultFileBase(templateData))}.${templateData.ext}`
+        return path.join(savePath, showFolder, itemFileName)
       }
 
       let plannedPath
-      if (template) {
+      if (forPlex) {
+        plannedPath = await plexFilePath({ savePath, showFolder, templateData, listFoldersOf })
+        if (!plannedPath) {
+          logWarning(`${item.title} has no season and episode number. Using the default name for it.`)
+          plannedPath = defaultFilePath()
+        }
+      } else if (template) {
         try {
           const relativePath = processPathTemplate({ templateString: template, data: templateData })
           plannedPath = path.resolve(savePath, relativePath)
@@ -666,7 +727,7 @@ const printRecordings = ({ recordings, jsonOutput, showsOnly }) => {
   })
 }
 
-const handleSaveAction = async ({ recordings, savePath, template, overwrite, concurrency, jsonOutput, retryDelays }) => {
+const handleSaveAction = async ({ recordings, savePath, template, forPlex, overwrite, concurrency, jsonOutput, retryDelays }) => {
   logHeading('Saving Recordings')
 
   try {
@@ -685,7 +746,7 @@ const handleSaveAction = async ({ recordings, savePath, template, overwrite, con
       }
     }
 
-    const results = await saveRecordings({ recordings, savePath, template, overwrite, concurrency, retryDelays })
+    const results = await saveRecordings({ recordings, savePath, template, forPlex, overwrite, concurrency, retryDelays })
     const summary = summariseSaveResults(results)
 
     if (summary.failed > 0) process.exitCode = 1
@@ -1092,7 +1153,7 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show' }) =
       }
     }
 
-    let ext = 'mpeg'
+    let ext = 'ts'
     const protocolInfo = getXmlAttr({ node: actualRes, attrName: 'protocolInfo', defaultValue: '' })
     if (protocolInfo.includes('mpeg-tts') || protocolInfo.includes('AVC_TS')) {
       ext = 'ts'
@@ -1705,9 +1766,9 @@ const formatItem = (item) => ({
 const createValidFilename = (filename = '') => {
   let result = _.chain(filename)
     .toString()
-    .trim()
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
     .replace(/\s+/g, ' ')
+    .trim()
     .value()
 
   if (result === '.' || result === '..') result = '_'
