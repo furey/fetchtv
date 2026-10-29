@@ -35,6 +35,7 @@ const BROWSE_RETRIES = 3
 const MAX_FILENAME = 255
 const FETCHTV_PORT = 49152
 const CONST_LOCK = '.lock'
+const PART_SUFFIX = '.part'
 const MIN_BROWSE_DELAY = 50
 const NO_NUMBER_DEFAULT = ''
 const REQUEST_TIMEOUT = 15000
@@ -362,6 +363,8 @@ const saveRecordings = async ({
   retryDelays = DOWNLOAD_RETRY_DELAYS
 }) => {
   const savedFilesDb = await loadSavedFiles(savePath)
+  const ownerByPath = ownersBySavedPath(savedFilesDb)
+  const claimedPaths = new Set()
   const jsonResults = []
   const tasks = []
 
@@ -387,16 +390,24 @@ const saveRecordings = async ({
         return path.join(savePath, showDirName, itemFileName)
       }
 
+      let plannedPath
       if (template) {
         try {
           const relativePath = processPathTemplate({ templateString: template, data: templateData })
-          filePath = path.resolve(savePath, relativePath)
+          plannedPath = path.resolve(savePath, relativePath)
         } catch (err) {
           logWarning(`${err.message} Using the default name for ${item.title}.`)
-          filePath = defaultFilePath()
+          plannedPath = defaultFilePath()
         }
       } else {
-        filePath = defaultFilePath()
+        plannedPath = defaultFilePath()
+      }
+
+      const target = await chooseSaveTarget({ plannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths })
+      filePath = target.filePath
+      claimedPaths.add(filePath)
+      if (target.takenPath) {
+        log(chalk.yellow(`${path.relative(savePath, target.takenPath)} already exists and fetchtv did not save it. Saving as ${path.basename(filePath)} instead.`))
       }
       showDirPath = path.dirname(filePath)
       const lockFilePath = `${filePath}${CONST_LOCK}`
@@ -498,6 +509,10 @@ const saveRecordings = async ({
 
     progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {pbValue}/{pbTotal} | {speed}/s | ETA: {pbETA}`
 
+    if (isPositiveSize(task.item.size)) {
+      await recordSaveStart({ savePath, savedFilesDb, item: task.item, filePath: task.filePath })
+    }
+
     const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays })
       .then(async (downloadResult) => {
         const resultEntry = {
@@ -513,7 +528,7 @@ const saveRecordings = async ({
         jsonResults.push(resultEntry)
 
         if (downloadResult.recorded) {
-          await addSavedFile({ savePath, savedFilesDb, item: task.item, size: downloadResult.size })
+          await addSavedFile({ savePath, savedFilesDb, item: task.item, size: downloadResult.size, filePath: task.filePath })
         }
       })
       .catch((error) => {
@@ -1170,6 +1185,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
   }
 
   const lockFilePath = `${filePath}${CONST_LOCK}`
+  const partFilePath = `${filePath}${PART_SUFFIX}`
   let writer = null
   let responseStream = null
   let existingSize = 0
@@ -1178,42 +1194,6 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
   let totalLength = 0
 
   try {
-    try {
-      if (fsc.existsSync(filePath)) {
-        if (overwrite) {
-          log(chalk.yellow(`Overwriting: ${item.title}`))
-          try {
-            fsc.unlinkSync(filePath)
-            debug('Deleted existing file for overwrite: %s', filePath)
-          } catch (unlinkErr) {
-            logWarning(`Could not delete existing file for overwrite: ${unlinkErr.message}`)
-          }
-          isResuming = false
-          existingSize = 0
-        } else {
-          const stats = await fs.stat(filePath)
-          existingSize = stats.size
-          if (existingSize > 0) {
-            isResuming = true
-            validResumable = true
-            debug('File exists, attempting resume from %s', filesize(existingSize, { spacer: '' }))
-          } else {
-            isResuming = false
-            existingSize = 0
-            debug('File exists but is empty, starting fresh download.')
-          }
-        }
-      } else {
-        isResuming = false
-        existingSize = 0
-      }
-    } catch (statErr) {
-      debug('Error checking file stats for resume: %O', statErr)
-      logWarning(`Could not check existing file status for ${item.title}: ${statErr.message}. Starting fresh download.`)
-      existingSize = 0
-      isResuming = false
-    }
-
     try {
       if (fsc.existsSync(lockFilePath)) {
         const isStale = await isLockFileStale(lockFilePath)
@@ -1234,6 +1214,24 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       debug('Lock file creation error details: %O', lockErr)
       if (progressBar) progressBar.stop()
       return { recorded: false, error: `Failed to create lock file: ${lockErr.message}` }
+    }
+
+    try {
+      if (overwrite) {
+        if (fsc.existsSync(partFilePath)) fsc.unlinkSync(partFilePath)
+        if (fsc.existsSync(filePath)) log(chalk.yellow(`Overwriting: ${item.title}`))
+      } else {
+        await adoptInPlacePartial({ item, filePath, partFilePath })
+        existingSize = fsc.existsSync(partFilePath) ? (await fs.stat(partFilePath)).size : 0
+        isResuming = existingSize > 0
+        validResumable = isResuming
+        if (isResuming) debug('Partial file exists, attempting resume from %s', filesize(existingSize, { spacer: '' }))
+      }
+    } catch (statErr) {
+      debug('Error checking file stats for resume: %O', statErr)
+      logWarning(`Could not check existing file status for ${item.title}: ${statErr.message}. Starting fresh download.`)
+      existingSize = 0
+      isResuming = false
     }
 
     if (isResuming && validResumable) {
@@ -1276,8 +1274,8 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
         isResuming = false
         existingSize = 0
         try {
-          fsc.unlinkSync(filePath)
-          debug('Deleted existing file content due to 200 OK on resume attempt.')
+          fsc.unlinkSync(partFilePath)
+          debug('Deleted existing partial file due to 200 OK on resume attempt.')
         } catch(unlinkErr) {
           logWarning(`Could not clear existing file after failed resume attempt: ${unlinkErr.message}`)
         }
@@ -1325,10 +1323,10 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       return { recorded: false, warning: 'Skipping item, content length is zero' }
     }
 
-    writer = fsc.createWriteStream(filePath, { flags: isResuming ? 'a' : 'w' })
+    writer = fsc.createWriteStream(partFilePath, { flags: isResuming ? 'a' : 'w' })
 
-    writer.on('open', () => debug('Write stream opened for %s with flags: %s', filePath, writer.flags))
-    writer.on('close', () => debug('Write stream closed for %s', filePath))
+    writer.on('open', () => debug('Write stream opened for %s with flags: %s', partFilePath, writer.flags))
+    writer.on('close', () => debug('Write stream closed for %s', partFilePath))
 
     if (progressBar) {
       const barTotal = Math.max(totalLength || 0, existingSize, 1)
@@ -1397,7 +1395,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
 
         let finalSize = -1
         try {
-          const finalStats = await fs.stat(filePath)
+          const finalStats = await fs.stat(partFilePath)
           finalSize = finalStats.size
           debug('Final file size for %s: %d bytes (expected %d)', item.title, finalSize, expectedSize)
         } catch (verifyErr) {
@@ -1428,6 +1426,14 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
         if (expectedSize === 0 && finalSize <= 0) {
           logWarning(`${item.title} finished with an empty file.`)
           resolve({ recorded: false, resumed: isResuming, retryable: true, warning: 'Download finished with an empty file' })
+          return
+        }
+
+        try {
+          await fs.rename(partFilePath, filePath)
+        } catch (renameErr) {
+          logError(`Could not move ${path.basename(partFilePath)} to ${path.basename(filePath)}: ${renameErr.message}`)
+          resolve({ recorded: false, resumed: isResuming, warning: `Saved, but could not rename the partial file: ${renameErr.message}` })
           return
         }
 
@@ -1531,6 +1537,15 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
 
     return { recorded: false, retryable: !error.response, error: `Download initiation failed: ${error.message}` }
   }
+}
+
+const adoptInPlacePartial = async ({ item, filePath, partFilePath }) => {
+  if (fsc.existsSync(partFilePath) || !fsc.existsSync(filePath)) return
+  const { size } = await fs.stat(filePath)
+  const isShorterThanRecording = size > 0 && isPositiveSize(item.size) && size < item.size - SIZE_TOLERANCE
+  if (!isShorterThanRecording) return
+  await fs.rename(filePath, partFilePath)
+  debug('Moved in-place partial %s to %s', filePath, partFilePath)
 }
 
 const describeInterruption = ({ item, err, completionPercentage }) => {
@@ -1725,18 +1740,90 @@ const loadSavedFiles = async (savePath) => {
   }
 }
 
-const addSavedFile = async ({ savePath, savedFilesDb, item, size }) => {
+const addSavedFile = async ({ savePath, savedFilesDb, item, size, filePath }) => {
   const savedSize = isPositiveSize(size) ? size : item.size
-  savedFilesDb[item.id] = isPositiveSize(savedSize)
-    ? { title: item.title, size: savedSize }
-    : { title: item.title }
-  const filePath = path.join(savePath, SAVE_FILE_NAME)
+  savedFilesDb[item.id] = {
+    title: item.title,
+    ...(isPositiveSize(savedSize) && { size: savedSize }),
+    ...savedPathField({ savePath, filePath })
+  }
+  await writeSavedFiles({ savePath, savedFilesDb })
+}
+
+const recordSaveStart = async ({ savePath, savedFilesDb, item, filePath }) => {
+  savedFilesDb[item.id] = { title: item.title, ...savedPathField({ savePath, filePath }) }
+  await writeSavedFiles({ savePath, savedFilesDb })
+}
+
+const savedPathField = ({ savePath, filePath }) =>
+  filePath ? { path: toSavedPath({ savePath, filePath }) } : {}
+
+const toSavedPath = ({ savePath, filePath }) =>
+  path.relative(savePath, filePath).split(path.sep).join('/')
+
+const savedFileWrites = new Map()
+
+const writeSavedFiles = ({ savePath, savedFilesDb }) => {
+  const dbPath = path.join(savePath, SAVE_FILE_NAME)
+  const previous = savedFileWrites.get(dbPath) ?? Promise.resolve()
+  const next = previous.then(() => replaceSavedFiles({ savePath, dbPath, savedFilesDb }))
+  savedFileWrites.set(dbPath, next)
+  return next
+}
+
+const replaceSavedFiles = async ({ savePath, dbPath, savedFilesDb }) => {
+  const tempPath = `${dbPath}.tmp`
   try {
     await fs.mkdir(savePath, { recursive: true })
-    await fs.writeFile(filePath, JSON.stringify(savedFilesDb, null, 2), 'utf-8')
+    await fs.writeFile(tempPath, JSON.stringify(savedFilesDb, null, 2), 'utf-8')
+    await fs.rename(tempPath, dbPath)
   } catch (error) {
     logError(`Error writing ${SAVE_FILE_NAME}: ${error.message}`)
   }
+}
+
+const ownersBySavedPath = (savedFilesDb) => new Map(
+  Object.entries(savedFilesDb)
+    .filter(([, entry]) => typeof entry?.path === 'string')
+    .map(([id, entry]) => [entry.path, id])
+)
+
+const isLegacySavedEntry = (entry) =>
+  typeof entry === 'string' || (typeof entry === 'object' && entry !== null && typeof entry.path !== 'string')
+
+const chooseSaveTarget = async ({ plannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths }) => {
+  const itemId = String(item.id)
+  const entry = savedFilesDb[item.id]
+  const recordedPath = typeof entry?.path === 'string' ? path.resolve(savePath, entry.path) : null
+  const isRecordedCopy = recordedPath && withoutCopySuffix(recordedPath) === plannedPath && !claimedPaths.has(recordedPath)
+  if (isRecordedCopy) return { filePath: recordedPath, takenPath: null }
+
+  for (let copy = 1; ; copy++) {
+    const filePath = withCopySuffix(plannedPath, copy)
+    const owner = ownerByPath.get(toSavedPath({ savePath, filePath }))
+    const takenPath = copy > 1 ? plannedPath : null
+    if (claimedPaths.has(filePath)) continue
+    if (owner && owner !== itemId) continue
+    if (owner === itemId || (copy === 1 && isLegacySavedEntry(entry))) return { filePath, takenPath }
+    if (!(await anyExists([filePath, `${filePath}${PART_SUFFIX}`]))) return { filePath, takenPath }
+  }
+}
+
+const withCopySuffix = (filePath, copy) => {
+  if (copy <= 1) return filePath
+  const ext = path.extname(filePath)
+  return path.join(path.dirname(filePath), `${path.basename(filePath, ext)} - copy ${copy}${ext}`)
+}
+
+const withoutCopySuffix = (filePath) => {
+  const ext = path.extname(filePath)
+  const base = path.basename(filePath, ext).replace(/ - copy \d+$/, '')
+  return path.join(path.dirname(filePath), `${base}${ext}`)
+}
+
+const anyExists = async (filePaths) => {
+  const found = await Promise.all(filePaths.map(filePath => fs.lstat(filePath).then(() => true, () => false)))
+  return found.some(Boolean)
 }
 
 const isLockFileStale = async (lockFilePath) => {

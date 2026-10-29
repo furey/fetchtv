@@ -91,6 +91,12 @@ const writePartial = async (item, bytes) => {
 
 const fileSize = async (item) => (await fs.stat(filePathFor(item))).size
 
+const partSize = async (item) => (await fs.stat(`${filePathFor(item)}.part`)).size
+
+const savedPathFor = (item) => `Bluey/${item.title}.ts`
+
+const exists = (filePath) => fs.access(filePath).then(() => true, () => false)
+
 const requestsFor = (route) => requestLog.filter(entry => entry.route === route)
 
 const silenceConsole = async (fn) => {
@@ -155,7 +161,7 @@ test('download: a full body is saved and fetchtv.json stores its size', async ()
 
   assert.equal(result[0].status, 'saved')
   assert.equal(await fileSize(item), BODY.length)
-  assert.deepEqual((await readDb())['1'], { title: item.title, size: BODY.length })
+  assert.deepEqual((await readDb())['1'], { title: item.title, size: BODY.length, path: savedPathFor(item) })
 })
 
 test('download: a short body is not marked saved and keeps the partial file', async () => {
@@ -165,8 +171,9 @@ test('download: a short body is not marked saved and keeps the partial file', as
 
   assert.equal(result[0].recorded, false)
   assert.equal(result[0].status, 'failed')
-  assert.equal(await fileSize(item), HALF)
-  assert.equal((await readDb().catch(() => ({})))['2'], undefined)
+  assert.equal(await partSize(item), HALF)
+  assert.equal(await exists(filePathFor(item)), false)
+  assert.deepEqual((await readDb())['2'], { title: item.title, path: savedPathFor(item) })
 })
 
 test('download: a mid-stream reset is not marked saved and keeps the partial file', async () => {
@@ -177,8 +184,8 @@ test('download: a mid-stream reset is not marked saved and keeps the partial fil
   assert.equal(result[0].recorded, false)
   assert.match(result[0].warning, /Download interrupted .* at 50\.0%/)
   assert.equal(result[0].status, 'failed')
-  assert.equal(await fileSize(item), HALF)
-  assert.equal((await readDb().catch(() => ({})))['3'], undefined)
+  assert.equal(await partSize(item), HALF)
+  assert.deepEqual((await readDb())['3'], { title: item.title, path: savedPathFor(item) })
 })
 
 test('retry: a mid-stream reset resumes with a Range request in the same run', async () => {
@@ -250,7 +257,7 @@ test('skip: an old-format entry with a short file and a known item size is resum
 
   assert.equal(result[0].status, 'saved')
   assert.deepEqual(requestsFor('/full').map(entry => entry.start), [HALF])
-  assert.deepEqual((await readDb())['9'], { title: item.title, size: BODY.length })
+  assert.deepEqual((await readDb())['9'], { title: item.title, size: BODY.length, path: savedPathFor(item) })
 })
 
 test('skip: a saved entry whose file is missing is saved again', async () => {
@@ -400,4 +407,93 @@ test('naming: a title that already has an SxxEyy pattern is not prefixed', async
     saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
 
   assert.ok((await fs.readFile(path.join(tmpDir, 'Bluey', 'S20 E8 - Episode 8.ts'))).equals(BODY))
+})
+
+const copyPathFor = (item, copy) => path.join(tmpDir, 'Bluey', `${item.title} - copy ${copy}.ts`)
+
+const FOREIGN = Buffer.from('a file another tool saved here')
+
+const writeForeign = async (filePath) => {
+  await fs.mkdir(path.dirname(filePath), { recursive: true })
+  await fs.writeFile(filePath, FOREIGN)
+}
+
+test('ownership: a file fetchtv did not save is left alone and the recording is saved under a copy name', async () => {
+  const item = makeItem({ id: '40', route: '/full' })
+  await writeForeign(filePathFor(item))
+  const { result, lines } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.ok((await fs.readFile(filePathFor(item))).equals(FOREIGN))
+  assert.ok((await fs.readFile(copyPathFor(item, 2))).equals(BODY))
+  assert.deepEqual(requestsFor('/full').map(entry => entry.start), [null])
+  assert.equal((await readDb())['40'].path, `Bluey/${item.title} - copy 2.ts`)
+  assert.ok(lines.some(line => line.includes('fetchtv did not save it') && line.includes(' - copy 2.ts')))
+})
+
+test('ownership: a re-run finds the copy-named save and skips it', async () => {
+  const item = makeItem({ id: '41', route: '/full' })
+  await writeForeign(filePathFor(item))
+  await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'already_saved')
+  assert.equal(requestsFor('/full').length, 1)
+  assert.equal(await exists(copyPathFor(item, 3)), false)
+})
+
+test('ownership: a short file fetchtv did not save is never resumed or truncated', async () => {
+  const item = makeItem({ id: '42', route: '/full' })
+  await writePartial(item, HALF)
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.equal(await fileSize(item), HALF)
+  assert.deepEqual(requestsFor('/full').map(entry => entry.start), [null])
+  assert.ok((await fs.readFile(copyPathFor(item, 2))).equals(BODY))
+})
+
+test('ownership: --overwrite replaces only files fetchtv saved', async () => {
+  const ours = makeItem({ id: '43', route: '/full' })
+  const theirs = makeItem({ id: '44', route: '/full' })
+  await writeDb({ '43': { title: ours.title, size: FOREIGN.length, path: savedPathFor(ours) } })
+  await writeForeign(filePathFor(ours))
+  await writeForeign(filePathFor(theirs))
+  await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([ours, theirs]), savePath: tmpDir, overwrite: true, retryDelays: NO_RETRIES }))
+
+  assert.ok((await fs.readFile(filePathFor(ours))).equals(BODY))
+  assert.ok((await fs.readFile(filePathFor(theirs))).equals(FOREIGN))
+  assert.ok((await fs.readFile(copyPathFor(theirs, 2))).equals(BODY))
+})
+
+test('ownership: two recordings that map to one name in a run get separate files', async () => {
+  const first = makeItem({ id: '45', route: '/full', title: 'S1 E9 - Repeat' })
+  const second = makeItem({ id: '46', route: '/full', title: 'S1 E9 - Repeat' })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([first, second]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.deepEqual(result.map(entry => entry.status), ['saved', 'saved'])
+  assert.ok((await fs.readFile(filePathFor(first))).equals(BODY))
+  assert.ok((await fs.readFile(copyPathFor(first, 2))).equals(BODY))
+  const db = await readDb()
+  assert.notEqual(db['45'].path, db['46'].path)
+})
+
+test('ownership: a partial file from an interrupted run is resumed from its .part file', async () => {
+  const item = makeItem({ id: '47', route: '/reset' })
+  await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+  assert.equal(await exists(filePathFor(item)), false)
+
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+  assert.equal(await exists(`${filePathFor(item)}.part`), false)
 })
