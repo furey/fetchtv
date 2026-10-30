@@ -35,6 +35,7 @@ const BROWSE_RETRIES = 3
 const MAX_FILENAME = 255
 const FETCHTV_PORT = 49152
 const CONST_LOCK = '.lock'
+const PART_SUFFIX = '.part'
 const MIN_BROWSE_DELAY = 50
 const NO_NUMBER_DEFAULT = ''
 const REQUEST_TIMEOUT = 15000
@@ -95,8 +96,8 @@ const main = async () => {
     .option('is-recording', { type: 'boolean', description: 'Filter recordings to only those that are currently recording' })
     .option('save', { type: 'string', description: 'Save recordings to the specified path' })
     .option('template', { type: 'string', description: 'Template for save path/filename structure (uses --save as base path)'})
-    .option('for-plex', { type: 'boolean', default: false, description: 'Use Plex-compatible template for saving recordings (overrides --template)' })
-    .option('overwrite', { type: 'boolean', default: false, description: 'Overwrite existing files when saving' })
+    .option('for-plex', { type: 'boolean', default: false, description: 'Save as Show/Season 01/Show - S01E02.ext, the Plex and Freetvarr layout (overrides --template)' })
+    .option('overwrite', { type: 'boolean', default: false, description: 'Save again over files that fetchtv saved earlier (never over other files)' })
     .option('concurrency', { type: 'number', default: DEFAULT_CONCURRENT_DOWNLOADS, description: `Number of recordings to save at the same time (${MIN_CONCURRENT_DOWNLOADS}-${MAX_CONCURRENT_DOWNLOADS})` })
     .option('json', { type: 'boolean', default: false, description: 'Output show/recording/save results in JSON' })
     .option('debug', { type: 'boolean', default: false, description: 'Enable verbose logging for debugging'})
@@ -122,20 +123,11 @@ const main = async () => {
     debug('Initial argv state: %O', argv)
   }
 
-  const plexTemplate = '${show_title}/Season ${season_number}/${show_title} - S${season_number}E${episode_number_padded}.${ext}'
-  let effectiveTemplate = argv.template
+  const forPlex = Boolean(argv.forPlex && argv.save)
+  const effectiveTemplate = forPlex ? null : argv.template
 
-  if (argv.forPlex) {
-    if (!argv.save) {
-      logWarning('--for-plex option ignored because --save was not specified.')
-    } else {
-      if (argv.template && argv.template !== plexTemplate) {
-        logWarning(`--for-plex overrides the provided --template option. Using Plex template.`)
-      }
-      effectiveTemplate = plexTemplate
-      debug('Using --for-plex template: %s', effectiveTemplate)
-    }
-  }
+  if (argv.forPlex && !argv.save) logWarning('--for-plex option ignored because --save was not specified.')
+  if (forPlex && argv.template) logWarning('--for-plex overrides the provided --template option. Using the Plex layout.')
 
   logHeading(`Started: ${new Date().toLocaleString()}`)
 
@@ -171,6 +163,7 @@ const main = async () => {
         recordings,
         savePath: path.resolve(argv.save),
         template: effectiveTemplate,
+        forPlex,
         overwrite: argv.overwrite,
         concurrency: argv.concurrency,
         jsonOutput: argv.json
@@ -353,15 +346,78 @@ const getFetchRecordings = async ({ location, filters }) => {
   return results
 }
 
+const plexFilePath = async ({ savePath, showFolder, templateData, listFoldersOf }) => {
+  const { season_number, episode_number, ext } = templateData
+  if (!season_number || !episode_number) return null
+  const season = Number(season_number)
+  const showPath = path.join(savePath, showFolder)
+  const seasonFolder = seasonFolderFor({ season, folders: await listFoldersOf(showPath) })
+  const fileName = `${showFolder} - S${padNumber(season)}E${padNumber(Number(episode_number))}.${ext}`
+  return path.join(showPath, seasonFolder, fileName)
+}
+
+const padNumber = (number) => String(number).padStart(2, '0')
+
+const seasonFolderFor = ({ season, folders }) => {
+  const padded = `Season ${padNumber(season)}`
+  const matching = [...folders].sort().filter(folder => seasonNumberOf(folder) === season)
+  return matching.find(folder => folder === padded) ?? matching[0] ?? padded
+}
+
+const seasonNumberOf = (folderName) => {
+  const match = SEASON_FOLDER_PATTERN.exec(folderName)
+  return match ? Number(match[1]) : null
+}
+
+const SEASON_FOLDER_PATTERN = /^season\s*(\d+)$/i
+
+const existingFolderFor = ({ title, folders }) => {
+  const wanted = createValidFilename(title).toLowerCase()
+  const sorted = [...folders].sort()
+  const exact = sorted.find(folder => folder.toLowerCase() === wanted)
+  if (exact) return exact
+  const suffixed = sorted.filter(folder => isSuffixedFolderOf({ folder, wanted }))
+  return suffixed.length === 1 ? suffixed[0] : undefined
+}
+
+const isSuffixedFolderOf = ({ folder, wanted }) => {
+  const name = folder.toLowerCase()
+  return name.startsWith(`${wanted} `) && YEAR_OR_COUNTRY_SUFFIX.test(name.slice(wanted.length))
+}
+
+const YEAR_OR_COUNTRY_SUFFIX = /^(?: \((?:\d{4}|[a-z]{2,3})\)){1,2}$/
+
+const createFolderLister = () => {
+  const listings = new Map()
+  return (dirPath) => {
+    if (!listings.has(dirPath)) listings.set(dirPath, listFolders(dirPath))
+    return listings.get(dirPath)
+  }
+}
+
+const listFolders = async (dirPath) => {
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true })
+    return entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort()
+  } catch (err) {
+    if (err.code !== 'ENOENT') debug('Could not list folders in %s: %O', dirPath, err)
+    return []
+  }
+}
+
 const saveRecordings = async ({
   recordings,
   savePath,
   template,
+  forPlex = false,
   overwrite,
   concurrency = DEFAULT_CONCURRENT_DOWNLOADS,
   retryDelays = DOWNLOAD_RETRY_DELAYS
 }) => {
   const savedFilesDb = await loadSavedFiles(savePath)
+  const listFoldersOf = createFolderLister()
+  const ownerByPath = ownersBySavedPath(savedFilesDb)
+  const claimedPaths = new Set()
   const jsonResults = []
   const tasks = []
 
@@ -381,22 +437,38 @@ const saveRecordings = async ({
         ext: item.ext || 'ts'
       }
 
+      const showFolder = existingFolderFor({ title: show.title, folders: await listFoldersOf(savePath) })
+        || createValidFilename(show.title)
+
       const defaultFilePath = () => {
-        const showDirName = createValidFilename(show.title)
-        const itemFileName = `${createValidFilename(buildDefaultFileBase(templateData))}.${templateData.ext || 'mpeg'}`
-        return path.join(savePath, showDirName, itemFileName)
+        const itemFileName = `${createValidFilename(buildDefaultFileBase(templateData))}.${templateData.ext}`
+        return path.join(savePath, showFolder, itemFileName)
       }
 
-      if (template) {
+      let plannedPath
+      if (forPlex) {
+        plannedPath = await plexFilePath({ savePath, showFolder, templateData, listFoldersOf })
+        if (!plannedPath) {
+          logWarning(`${item.title} has no season and episode number. Using the default name for it.`)
+          plannedPath = defaultFilePath()
+        }
+      } else if (template) {
         try {
           const relativePath = processPathTemplate({ templateString: template, data: templateData })
-          filePath = path.resolve(savePath, relativePath)
+          plannedPath = path.resolve(savePath, relativePath)
         } catch (err) {
           logWarning(`${err.message} Using the default name for ${item.title}.`)
-          filePath = defaultFilePath()
+          plannedPath = defaultFilePath()
         }
       } else {
-        filePath = defaultFilePath()
+        plannedPath = defaultFilePath()
+      }
+
+      const target = await chooseSaveTarget({ plannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths })
+      filePath = target.filePath
+      claimedPaths.add(filePath)
+      if (target.takenPath) {
+        log(chalk.yellow(`${path.relative(savePath, target.takenPath)} already exists and fetchtv did not save it. Saving as ${path.basename(filePath)} instead.`))
       }
       showDirPath = path.dirname(filePath)
       const lockFilePath = `${filePath}${CONST_LOCK}`
@@ -498,6 +570,10 @@ const saveRecordings = async ({
 
     progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {pbValue}/{pbTotal} | {speed}/s | ETA: {pbETA}`
 
+    if (isPositiveSize(task.item.size)) {
+      await recordSaveStart({ savePath, savedFilesDb, item: task.item, filePath: task.filePath })
+    }
+
     const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays })
       .then(async (downloadResult) => {
         const resultEntry = {
@@ -513,7 +589,7 @@ const saveRecordings = async ({
         jsonResults.push(resultEntry)
 
         if (downloadResult.recorded) {
-          await addSavedFile({ savePath, savedFilesDb, item: task.item, size: downloadResult.size })
+          await addSavedFile({ savePath, savedFilesDb, item: task.item, size: downloadResult.size, filePath: task.filePath })
         }
       })
       .catch((error) => {
@@ -651,7 +727,7 @@ const printRecordings = ({ recordings, jsonOutput, showsOnly }) => {
   })
 }
 
-const handleSaveAction = async ({ recordings, savePath, template, overwrite, concurrency, jsonOutput, retryDelays }) => {
+const handleSaveAction = async ({ recordings, savePath, template, forPlex, overwrite, concurrency, jsonOutput, retryDelays }) => {
   logHeading('Saving Recordings')
 
   try {
@@ -670,7 +746,7 @@ const handleSaveAction = async ({ recordings, savePath, template, overwrite, con
       }
     }
 
-    const results = await saveRecordings({ recordings, savePath, template, overwrite, concurrency, retryDelays })
+    const results = await saveRecordings({ recordings, savePath, template, forPlex, overwrite, concurrency, retryDelays })
     const summary = summariseSaveResults(results)
 
     if (summary.failed > 0) process.exitCode = 1
@@ -1077,7 +1153,7 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show' }) =
       }
     }
 
-    let ext = 'mpeg'
+    let ext = 'ts'
     const protocolInfo = getXmlAttr({ node: actualRes, attrName: 'protocolInfo', defaultValue: '' })
     if (protocolInfo.includes('mpeg-tts') || protocolInfo.includes('AVC_TS')) {
       ext = 'ts'
@@ -1170,6 +1246,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
   }
 
   const lockFilePath = `${filePath}${CONST_LOCK}`
+  const partFilePath = `${filePath}${PART_SUFFIX}`
   let writer = null
   let responseStream = null
   let existingSize = 0
@@ -1178,42 +1255,6 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
   let totalLength = 0
 
   try {
-    try {
-      if (fsc.existsSync(filePath)) {
-        if (overwrite) {
-          log(chalk.yellow(`Overwriting: ${item.title}`))
-          try {
-            fsc.unlinkSync(filePath)
-            debug('Deleted existing file for overwrite: %s', filePath)
-          } catch (unlinkErr) {
-            logWarning(`Could not delete existing file for overwrite: ${unlinkErr.message}`)
-          }
-          isResuming = false
-          existingSize = 0
-        } else {
-          const stats = await fs.stat(filePath)
-          existingSize = stats.size
-          if (existingSize > 0) {
-            isResuming = true
-            validResumable = true
-            debug('File exists, attempting resume from %s', filesize(existingSize, { spacer: '' }))
-          } else {
-            isResuming = false
-            existingSize = 0
-            debug('File exists but is empty, starting fresh download.')
-          }
-        }
-      } else {
-        isResuming = false
-        existingSize = 0
-      }
-    } catch (statErr) {
-      debug('Error checking file stats for resume: %O', statErr)
-      logWarning(`Could not check existing file status for ${item.title}: ${statErr.message}. Starting fresh download.`)
-      existingSize = 0
-      isResuming = false
-    }
-
     try {
       if (fsc.existsSync(lockFilePath)) {
         const isStale = await isLockFileStale(lockFilePath)
@@ -1234,6 +1275,24 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       debug('Lock file creation error details: %O', lockErr)
       if (progressBar) progressBar.stop()
       return { recorded: false, error: `Failed to create lock file: ${lockErr.message}` }
+    }
+
+    try {
+      if (overwrite) {
+        if (fsc.existsSync(partFilePath)) fsc.unlinkSync(partFilePath)
+        if (fsc.existsSync(filePath)) log(chalk.yellow(`Overwriting: ${item.title}`))
+      } else {
+        await adoptInPlacePartial({ item, filePath, partFilePath })
+        existingSize = fsc.existsSync(partFilePath) ? (await fs.stat(partFilePath)).size : 0
+        isResuming = existingSize > 0
+        validResumable = isResuming
+        if (isResuming) debug('Partial file exists, attempting resume from %s', filesize(existingSize, { spacer: '' }))
+      }
+    } catch (statErr) {
+      debug('Error checking file stats for resume: %O', statErr)
+      logWarning(`Could not check existing file status for ${item.title}: ${statErr.message}. Starting fresh download.`)
+      existingSize = 0
+      isResuming = false
     }
 
     if (isResuming && validResumable) {
@@ -1276,8 +1335,8 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
         isResuming = false
         existingSize = 0
         try {
-          fsc.unlinkSync(filePath)
-          debug('Deleted existing file content due to 200 OK on resume attempt.')
+          fsc.unlinkSync(partFilePath)
+          debug('Deleted existing partial file due to 200 OK on resume attempt.')
         } catch(unlinkErr) {
           logWarning(`Could not clear existing file after failed resume attempt: ${unlinkErr.message}`)
         }
@@ -1325,10 +1384,10 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       return { recorded: false, warning: 'Skipping item, content length is zero' }
     }
 
-    writer = fsc.createWriteStream(filePath, { flags: isResuming ? 'a' : 'w' })
+    writer = fsc.createWriteStream(partFilePath, { flags: isResuming ? 'a' : 'w' })
 
-    writer.on('open', () => debug('Write stream opened for %s with flags: %s', filePath, writer.flags))
-    writer.on('close', () => debug('Write stream closed for %s', filePath))
+    writer.on('open', () => debug('Write stream opened for %s with flags: %s', partFilePath, writer.flags))
+    writer.on('close', () => debug('Write stream closed for %s', partFilePath))
 
     if (progressBar) {
       const barTotal = Math.max(totalLength || 0, existingSize, 1)
@@ -1397,7 +1456,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
 
         let finalSize = -1
         try {
-          const finalStats = await fs.stat(filePath)
+          const finalStats = await fs.stat(partFilePath)
           finalSize = finalStats.size
           debug('Final file size for %s: %d bytes (expected %d)', item.title, finalSize, expectedSize)
         } catch (verifyErr) {
@@ -1428,6 +1487,14 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
         if (expectedSize === 0 && finalSize <= 0) {
           logWarning(`${item.title} finished with an empty file.`)
           resolve({ recorded: false, resumed: isResuming, retryable: true, warning: 'Download finished with an empty file' })
+          return
+        }
+
+        try {
+          await fs.rename(partFilePath, filePath)
+        } catch (renameErr) {
+          logError(`Could not move ${path.basename(partFilePath)} to ${path.basename(filePath)}: ${renameErr.message}`)
+          resolve({ recorded: false, resumed: isResuming, warning: `Saved, but could not rename the partial file: ${renameErr.message}` })
           return
         }
 
@@ -1531,6 +1598,15 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
 
     return { recorded: false, retryable: !error.response, error: `Download initiation failed: ${error.message}` }
   }
+}
+
+const adoptInPlacePartial = async ({ item, filePath, partFilePath }) => {
+  if (fsc.existsSync(partFilePath) || !fsc.existsSync(filePath)) return
+  const { size } = await fs.stat(filePath)
+  const isShorterThanRecording = size > 0 && isPositiveSize(item.size) && size < item.size - SIZE_TOLERANCE
+  if (!isShorterThanRecording) return
+  await fs.rename(filePath, partFilePath)
+  debug('Moved in-place partial %s to %s', filePath, partFilePath)
 }
 
 const describeInterruption = ({ item, err, completionPercentage }) => {
@@ -1690,9 +1766,9 @@ const formatItem = (item) => ({
 const createValidFilename = (filename = '') => {
   let result = _.chain(filename)
     .toString()
-    .trim()
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
     .replace(/\s+/g, ' ')
+    .trim()
     .value()
 
   if (result === '.' || result === '..') result = '_'
@@ -1725,18 +1801,90 @@ const loadSavedFiles = async (savePath) => {
   }
 }
 
-const addSavedFile = async ({ savePath, savedFilesDb, item, size }) => {
+const addSavedFile = async ({ savePath, savedFilesDb, item, size, filePath }) => {
   const savedSize = isPositiveSize(size) ? size : item.size
-  savedFilesDb[item.id] = isPositiveSize(savedSize)
-    ? { title: item.title, size: savedSize }
-    : { title: item.title }
-  const filePath = path.join(savePath, SAVE_FILE_NAME)
+  savedFilesDb[item.id] = {
+    title: item.title,
+    ...(isPositiveSize(savedSize) && { size: savedSize }),
+    ...savedPathField({ savePath, filePath })
+  }
+  await writeSavedFiles({ savePath, savedFilesDb })
+}
+
+const recordSaveStart = async ({ savePath, savedFilesDb, item, filePath }) => {
+  savedFilesDb[item.id] = { title: item.title, ...savedPathField({ savePath, filePath }) }
+  await writeSavedFiles({ savePath, savedFilesDb })
+}
+
+const savedPathField = ({ savePath, filePath }) =>
+  filePath ? { path: toSavedPath({ savePath, filePath }) } : {}
+
+const toSavedPath = ({ savePath, filePath }) =>
+  path.relative(savePath, filePath).split(path.sep).join('/')
+
+const savedFileWrites = new Map()
+
+const writeSavedFiles = ({ savePath, savedFilesDb }) => {
+  const dbPath = path.join(savePath, SAVE_FILE_NAME)
+  const previous = savedFileWrites.get(dbPath) ?? Promise.resolve()
+  const next = previous.then(() => replaceSavedFiles({ savePath, dbPath, savedFilesDb }))
+  savedFileWrites.set(dbPath, next)
+  return next
+}
+
+const replaceSavedFiles = async ({ savePath, dbPath, savedFilesDb }) => {
+  const tempPath = `${dbPath}.tmp`
   try {
     await fs.mkdir(savePath, { recursive: true })
-    await fs.writeFile(filePath, JSON.stringify(savedFilesDb, null, 2), 'utf-8')
+    await fs.writeFile(tempPath, JSON.stringify(savedFilesDb, null, 2), 'utf-8')
+    await fs.rename(tempPath, dbPath)
   } catch (error) {
     logError(`Error writing ${SAVE_FILE_NAME}: ${error.message}`)
   }
+}
+
+const ownersBySavedPath = (savedFilesDb) => new Map(
+  Object.entries(savedFilesDb)
+    .filter(([, entry]) => typeof entry?.path === 'string')
+    .map(([id, entry]) => [entry.path, id])
+)
+
+const isLegacySavedEntry = (entry) =>
+  typeof entry === 'string' || (typeof entry === 'object' && entry !== null && typeof entry.path !== 'string')
+
+const chooseSaveTarget = async ({ plannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths }) => {
+  const itemId = String(item.id)
+  const entry = savedFilesDb[item.id]
+  const recordedPath = typeof entry?.path === 'string' ? path.resolve(savePath, entry.path) : null
+  const isRecordedCopy = recordedPath && withoutCopySuffix(recordedPath) === plannedPath && !claimedPaths.has(recordedPath)
+  if (isRecordedCopy) return { filePath: recordedPath, takenPath: null }
+
+  for (let copy = 1; ; copy++) {
+    const filePath = withCopySuffix(plannedPath, copy)
+    const owner = ownerByPath.get(toSavedPath({ savePath, filePath }))
+    const takenPath = copy > 1 ? plannedPath : null
+    if (claimedPaths.has(filePath)) continue
+    if (owner && owner !== itemId) continue
+    if (owner === itemId || (copy === 1 && isLegacySavedEntry(entry))) return { filePath, takenPath }
+    if (!(await anyExists([filePath, `${filePath}${PART_SUFFIX}`]))) return { filePath, takenPath }
+  }
+}
+
+const withCopySuffix = (filePath, copy) => {
+  if (copy <= 1) return filePath
+  const ext = path.extname(filePath)
+  return path.join(path.dirname(filePath), `${path.basename(filePath, ext)} - copy ${copy}${ext}`)
+}
+
+const withoutCopySuffix = (filePath) => {
+  const ext = path.extname(filePath)
+  const base = path.basename(filePath, ext).replace(/ - copy \d+$/, '')
+  return path.join(path.dirname(filePath), `${base}${ext}`)
+}
+
+const anyExists = async (filePaths) => {
+  const found = await Promise.all(filePaths.map(filePath => fs.lstat(filePath).then(() => true, () => false)))
+  return found.some(Boolean)
 }
 
 const isLockFileStale = async (lockFilePath) => {

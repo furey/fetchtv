@@ -196,3 +196,8 @@ test('formatItem: projects only the public-facing keys', () => {
   assert.equal(result.id, '100')
   assert.equal(result.season_number_padded, '01')
 })
+
+test('createValidFilename: trims spaces left by removed characters', () => {
+  assert.equal(createValidFilename('Gogglebox: '), 'Gogglebox')
+  assert.equal(createValidFilename(' ?Show'), 'Show')
+})
