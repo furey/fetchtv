@@ -35,11 +35,14 @@ docker run --rm --network host furey/fetchtv recordings
 
 ```sh
 docker run --rm --network host \
+  --user "$(id -u):$(id -g)" \
   -v /path/on/host:/downloads \
   furey/fetchtv recordings \
-  --folder "Bluey" \
+  --show "Bluey" \
   --save /downloads
 ```
+
+`--user` makes the saved files belong to you instead of `root`. To save into a Freetvarr or Plex library, use the library's user and group instead (e.g. `--user 1026:100` for Freetvarr's `PUID` and `PGID`), and add `--for-plex` for the `Show/Season 01/Show - S01E02.ts` layout.
 
 ### Auto-discover the box on the LAN
 
@@ -65,14 +68,15 @@ docker run --rm furey/fetchtv recordings --ip 192.168.1.20
 
 ## Common flags
 
-| Flag              | Purpose                                       |
-| ----------------- | --------------------------------------------- |
-| `--ip <addr>`     | Target a specific Fetch TV IP, skip discovery |
-| `--port <num>`    | Fetch TV port (default `49152`)               |
-| `--folder <name>` | Filter to a specific show/folder (repeatable) |
-| `--save <path>`   | Output directory for downloads                |
-| `--overwrite`     | Re-download files that already exist locally  |
-| `--debug`         | Verbose UPnP/SSDP logs                        |
+| Flag            | Purpose                                                |
+| --------------- | ------------------------------------------------------ |
+| `--ip <addr>`   | Target a specific Fetch TV IP, skip discovery          |
+| `--port <num>`  | Fetch TV port (default `49152`)                        |
+| `--show <name>` | Filter to show titles containing the text (repeatable) |
+| `--for-plex`    | Save as `Show/Season 01/Show - S01E02.ts`              |
+| `--save <path>` | Output directory for downloads                         |
+| `--overwrite`   | Save again over files fetchtv saved earlier            |
+| `--debug`       | Verbose UPnP/SSDP logs                                 |
 
 Full CLI reference, path-template variables, and the programmatic ESM API are documented in the [GitHub README](https://github.com/furey/fetchtv#readme).
 

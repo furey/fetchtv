@@ -124,7 +124,7 @@ test('saveRecordings: writes downloaded files to disk and updates fetchtv.json',
   assert.equal(written.length, payload.length)
 
   const dbRaw = await fs.readFile(path.join(tmpDir, 'fetchtv.json'), 'utf-8')
-  assert.deepEqual(JSON.parse(dbRaw), { '900': { title: 'S1 E5 - Pool', size: payload.length } })
+  assert.deepEqual(JSON.parse(dbRaw), { '900': { title: 'S1 E5 - Pool', size: payload.length, path: 'Bluey/S1 E5 - Pool.ts' } })
 
   assert.ok(results.find(r => r.recorded === true), 'expected at least one recorded result')
 })

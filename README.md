@@ -22,6 +22,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Template Variables](#template-variables)
 - [Examples](#examples)
 - [Interrupted Saves](#interrupted-saves)
+- [Moving to Freetvarr or Plex](#moving-to-freetvarr-or-plex)
 - [Programmatic API](#programmatic-api)
 - [Tests](#tests)
 - [GitHub Workflows](#github-workflows)
@@ -224,25 +225,25 @@ If you [linked the tool](#optional-link-fetchtv-tool) after installing from sour
 fetchtv <COMMAND> [OPTIONS]
 ```
 
-| Command/Option   | Alias | Type      | Description                                                                     |
-| ---------------- | ----- | --------- | ------------------------------------------------------------------------------- |
-| `info`           |       | `command` | Returns Fetch TV server details                                                 |
-| `recordings`     |       | `command` | List episode recordings                                                         |
-| `shows`          |       | `command` | List show titles and not the episodes within                                    |
-| `--ip`           |       | `string`  | Specify the IP Address of the Fetch TV server                                   |
-| `--port`         |       | `number`  | Specify the port of the Fetch TV server (default: `49152`)                      |
-| `--show`         | `-s`  | `array`   | Filter recordings to show titles containing the specified text (repeatable)     |
-| `--exclude`      | `-e`  | `array`   | Filter recordings to show titles NOT containing the specified text (repeatable) |
-| `--title`        | `-t`  | `array`   | Filter recordings to episode titles containing the specified text (repeatable)  |
-| `--is-recording` |       | `boolean` | Filter recordings to only those that are currently recording                    |
-| `--save`         |       | `string`  | Save recordings to the specified path                                           |
-| `--template`     |       | `string`  | Template for save path/filename structure (uses --save as base path)            |
-| `--for-plex`     |       | `boolean` | Uses Plex-compatible template for saving recordings (overrides --template)      |
-| `--overwrite`    | `-o`  | `boolean` | Overwrite existing files when saving                                            |
-| `--concurrency`  |       | `number`  | Number of recordings to save at the same time, `1` to `10` (default: `2`)       |
-| `--json`         | `-j`  | `boolean` | Output show/recording/save results in JSON                                      |
-| `--debug`        | `-d`  | `boolean` | Enable verbose logging for debugging                                            |
-| `--help`         | `-h`  | `boolean` | Show help message                                                               |
+| Command/Option   | Alias | Type      | Description                                                                                     |
+| ---------------- | ----- | --------- | ----------------------------------------------------------------------------------------------- |
+| `info`           |       | `command` | Returns Fetch TV server details                                                                 |
+| `recordings`     |       | `command` | List episode recordings                                                                         |
+| `shows`          |       | `command` | List show titles and not the episodes within                                                    |
+| `--ip`           |       | `string`  | Specify the IP Address of the Fetch TV server                                                   |
+| `--port`         |       | `number`  | Specify the port of the Fetch TV server (default: `49152`)                                      |
+| `--show`         | `-s`  | `array`   | Filter recordings to show titles containing the specified text (repeatable)                     |
+| `--exclude`      | `-e`  | `array`   | Filter recordings to show titles NOT containing the specified text (repeatable)                 |
+| `--title`        | `-t`  | `array`   | Filter recordings to episode titles containing the specified text (repeatable)                  |
+| `--is-recording` |       | `boolean` | Filter recordings to only those that are currently recording                                    |
+| `--save`         |       | `string`  | Save recordings to the specified path                                                           |
+| `--template`     |       | `string`  | Template for save path/filename structure (uses --save as base path)                            |
+| `--for-plex`     |       | `boolean` | Saves in the Plex and Freetvarr layout `Show/Season 01/Show - S01E02.ts` (overrides --template) |
+| `--overwrite`    | `-o`  | `boolean` | Save again over files that fetchtv saved earlier (never over other files)                       |
+| `--concurrency`  |       | `number`  | Number of recordings to save at the same time, `1` to `10` (default: `2`)                       |
+| `--json`         | `-j`  | `boolean` | Output show/recording/save results in JSON                                                      |
+| `--debug`        | `-d`  | `boolean` | Enable verbose logging for debugging                                                            |
+| `--help`         | `-h`  | `boolean` | Show help message                                                                               |
 
 ### Template Variables
 
@@ -265,15 +266,21 @@ When using `--template`, the following variables are available:
 | `${episode_number_padded}` | Episode number with leading zero | `02`                                           |
 | `${ext}`                   | File extension (ts, mp4, etc)    | `ts`                                           |
 
-#### Plex-Compatible Template
+#### Plex-Compatible Layout
 
-The `--for-plex` option uses a predefined template optimized for Plex media server:
+The `--for-plex` option saves each episode in the layout that Plex expects and that Freetvarr uses for its own recordings:
 
-```js
-`${show_title}/Season ${season_number}/${show_title} - S${season_number}E${episode_number_padded}.${ext}`
+```text
+<show>/Season 01/<show> - S01E02.ts
 ```
 
-If a recording has no season or episode number (a film or news bulletin), the template cannot fill its placeholders. FetchTV then saves that recording under the default name (`<show>/<title>.<ext>`), prints a warning, and carries on with the rest.
+- **Season folder**: `Season` and the season number with at least two digits (`Season 01`, `Season 22`). If the show folder already has a folder for the same season number without the zero (e.g. `Season 1` from an earlier `fetchtv` save, Sonarr, or a manual copy), `fetchtv` saves into that folder instead of making a second one.
+- **File name**: the show folder name, then `SxxEyy` with two-digit season and episode numbers.
+- **Show folder**: chosen as Freetvarr chooses it. A folder with the same name (ignoring case) comes first. If there is none, and exactly one folder has the name plus a year or country (e.g. `Bluey (2018)` or `The Traitors (AU)`), `fetchtv` uses it. Otherwise it makes a folder named after the show. The default layout picks show folders the same way.
+
+If a recording has no season or episode number (a film or news bulletin), `--for-plex` saves it under the default name (`<show>/<title>.<ext>`), prints a warning, and carries on with the rest.
+
+A custom `--template` is used as written: its folder names are not matched against existing folders.
 
 The default name gets an `SxxEyy -` prefix when the season and episode are known but the title has no `SxxEyy` tag (for example when they come only from the recording's parent task name). Plex and Jellyfin use the prefix to match the episode, for example `Australian Survivor/S10E02 - Episode 2 - Tue 18 Feb.ts`.
 
@@ -281,19 +288,19 @@ The default name gets an `SxxEyy -` prefix when the season and episode are known
 
 Save recordings with show folder:
 
-```
+```text
 ${show_title}/${recording_title}.${ext}
 ```
 
 Save recordings with show folder and `SXXEXX` episode naming:
 
-```
+```text
 ${show_title}/S${season_number_padded}E${episode_number_padded}.${ext}
 ```
 
 Save recordings with show and season folders:
 
-```
+```text
 ${show_title}/Season ${season_number}/${recording_title}.${ext}
 ```
 
@@ -384,7 +391,14 @@ fetchtv recordings --ip=192.168.86.71 --save=./media --for-plex
 
 A save can stop part way: the network drops, the Fetch box resets the connection, or you press `Ctrl+C`. To finish it, run the same command again. `fetchtv` resumes partial files from where they stopped and skips recordings that are already complete.
 
-Each recording gets up to two retries in the same run (after `5 s`, then `15 s`) before `fetchtv` moves on. A recording counts as saved only when the file on disk matches the size the Fetch box reported. `fetchtv.json` in the save folder records each saved recording with its size, so a later run can find a file that is missing or short and save it again.
+While a recording downloads, `fetchtv` writes it to `<name>.part` beside a `<name>.lock` file. When the size matches what the Fetch box reported, `fetchtv` renames the `.part` file to its final name and removes the lock. Plex and Freetvarr do not read `.part` or `.lock` files, so a half-copied recording does not show up in your library.
+
+Each recording gets up to two retries in the same run (after `5 s`, then `15 s`) before `fetchtv` moves on. `fetchtv.json` in the save folder records each recording that `fetchtv` started, with its path inside the save folder, and adds the size when the save is complete. A later run uses it to find a file that is missing or short and save it again.
+
+`fetchtv` only resumes, replaces, or skips files that `fetchtv.json` says it saved. If another file already has the name a recording would get (e.g. a recording that Freetvarr imported), `fetchtv` leaves that file alone, saves the recording as `<name> - copy 2.ts` (the next free number, as Freetvarr does), and prints which name it used. `--overwrite` follows the same rule.
+
+> [!NOTE]<br>
+> Versions before this change wrote partial files under their final name and did not record them in `fetchtv.json`. A partial file left by an older version is now treated as another tool's file: the new run saves a `- copy 2` file beside it. Delete the old partial file when the new save finishes.
 
 The last line of a save tells you how many recordings are left:
 
@@ -395,6 +409,37 @@ Saved 12 of 412, 386 already saved. 9 failed, 5 still recording. Run the same co
 If any recording failed, `fetchtv` exits with code `1`. With `--json`, the output is an object with a `summary` of these counts and the per-recording `results`.
 
 If saves fail often, try `--concurrency=1` so that only one recording downloads at a time.
+
+## Moving to Freetvarr or Plex
+
+These steps copy a Fetch box's recordings into the media folders of [Freetvarr](https://github.com/furey/freetvarr) (or any Plex library), so that each show's Fetch episodes and new recordings share one folder.
+
+1. Save the series with `--for-plex`, straight into the TV folder. Leave out films and one-off programmes:
+
+    ```console
+    fetchtv recordings --ip=192.168.86.71 --for-plex --save=/Volumes/data/media/tv --exclude=News
+    ```
+
+1. Save each film into the movies folder:
+
+    ```console
+    fetchtv recordings --ip=192.168.86.71 --show="Some Film" --save=/Volumes/data/media/movies
+    ```
+
+1. Save news, sport, and other one-off programmes into the one-offs folder:
+
+    ```console
+    fetchtv recordings --ip=192.168.86.71 --show=News --save=/Volumes/data/media/one-offs
+    ```
+
+1. Scan the libraries in Plex, or wait for the next automatic scan.
+
+Points to check:
+
+- **Episode numbers**: Fetch numbers episodes from its own guide data. The numbers can differ from the guide that Freetvarr and Plex use, for example Fetch's `S22 E34` of The Block was `S22E35` in the guide. When a show has both Fetch and Freetvarr recordings from the same weeks, compare the air dates and rename the Fetch files where the numbers differ. `fetchtv` cannot see the guide, so it cannot fix the numbers itself.
+- **Default layout**: without `--for-plex`, episodes go straight into the show folder with Fetch's own titles (e.g. `The Block/S22 E34 - Kids Room and Re-Do Room Week - Tue 29 Sep.ts`). Plex reads these, but Freetvarr only looks for replacement files inside season folders, so use `--for-plex` for a Freetvarr library.
+- **File owner**: Freetvarr can only rename, edit, or delete files that its user can write. Saving over a network share (SMB) from a Mac or PC gives the files the share user's ownership, which is usually correct. With Docker, run the container as the Freetvarr user (`PUID` and `PGID`), e.g. `docker run --rm --network host --user 1026:100 -v /path/to/media/tv:/downloads furey/fetchtv recordings --for-plex --save /downloads`. Without `--user`, the files belong to `root`.
+- **Other files**: `fetchtv.json` stays in the top of the save folder. Keep it there so that later runs know which files `fetchtv` saved. Plex and Freetvarr ignore it.
 
 ## Programmatic API
 
@@ -427,7 +472,7 @@ const shows = await getFetchRecordings({
   }
 })
 
-// Download a single item
+// Download a single item (fetchtv writes /tmp/example.ts.part, then renames it)
 await downloadFile({
   item: shows[0].items[0],
   filePath: '/tmp/example.ts',
@@ -436,28 +481,28 @@ await downloadFile({
 })
 ```
 
-| Export                  | Signature                                                                                                            | Returns                                                                                                                                                                                                                                                                 |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `discoverFetchServers`  | `({ timeoutMs = 3000 } = {}) => Promise<Server[]>`                                                                   | Every Fetch TV device found on the LAN via SSDP. Empty array if none.                                                                                                                                                                                                   |
-| `discoverFetch`         | `({ ip, port }) => Promise<Location \| null>`                                                                        | First Fetch TV device matching the given `ip`/`port` (or first found via SSDP if `ip` is omitted), with the full `_rawDeviceXml` payload needed by `getFetchRecordings` and friends.                                                                                    |
-| `getFetchRecordings`    | `({ location, filters }) => Promise<Show[]>`                                                                         | Show folders and their items. See example above for `filters` shape.                                                                                                                                                                                                    |
-| `downloadFile`          | `({ item, filePath, progressBar, overwrite }) => Promise<{ success, filePath, error?, warning? }>`                   | Streams a recording to disk (supports resume).                                                                                                                                                                                                                          |
-| `isCurrentlyRecording`  | `(item) => Promise<boolean>`                                                                                         | Whether an item is still being recorded (vs. a complete file).                                                                                                                                                                                                          |
-| `formatItem`            | `(item) => string`                                                                                                   | Human-readable description (title, size, duration).                                                                                                                                                                                                                     |
-| `createValidFilename`   | `(name) => string`                                                                                                   | Filesystem-safe version of a string (strips/replaces problematic characters).                                                                                                                                                                                           |
-| `processPathTemplate`   | `({ template, placeholders }) => string`                                                                             | Substitutes `{season}`, `{season_padded}`, `{season_unpadded}` etc. in a path template.                                                                                                                                                                                 |
-| `parseXml`              | `(xmlString) => object \| null`                                                                                      | Parses an XML string (SOAP envelopes, MediaServer.xml, etc.) with the same fast-xml-parser options the CLI uses. Returns `null` on empty/invalid input.                                                                                                                 |
-| `parseLocations`        | `(urls) => Promise<Location[]>`                                                                                      | Fetches and parses an array of UPnP MediaServer.xml URLs into Location objects. Useful if you have device URLs from somewhere other than SSDP.                                                                                                                          |
-| `getApiService`         | `(location) => Promise<{ cd_ctr, cd_service } \| null>`                                                              | Extracts the ContentDirectory control URL + service URN from a Location. Required to use the lower-level browse helpers below.                                                                                                                                          |
-| `findDirectories`       | `({ apiService, objectId }) => Promise<Container[]>`                                                                 | Lists child containers (folders) under a UPnP ObjectID — e.g. enumerate "Recordings" by passing the root's object id.                                                                                                                                                   |
-| `findItems`             | `({ apiService, objectId, showTitle }) => Promise<Item[]>`                                                           | Lists items (recordings) under a UPnP container, with season/episode numbers parsed from titles and the file extension inferred from `protocolInfo`.                                                                                                                    |
-| `browseRequest`         | `({ apiService, objectId }) => Promise<object \| null>`                                                              | Raw SOAP Browse, returns the parsed DIDL-Lite payload. Use this if you need attributes neither `findItems` nor `findDirectories` surface.                                                                                                                               |
-| `saveRecordings`        | `({ recordings, savePath, template, overwrite, concurrency = 2, retryDelays = [5000, 15000] }) => Promise<Result[]>` | Higher-level batch save: takes the output of `getFetchRecordings`, writes each item to disk with resume, retry, and lock-file handling, and updates the saved-files DB. Each result has a `status`: `saved`, `already_saved`, `still_recording`, `locked`, or `failed`. |
-| `loadSavedFiles`        | `(savePath) => Promise<Record<string, { title, size? } \| string>>`                                                  | Reads `fetchtv.json` (id → `{ title, size }` of already-saved items; older files map id → title) from `savePath`. Returns `{}` if missing or unreadable.                                                                                                                |
-| `addSavedFile`          | `({ savePath, savedFilesDb, item, size }) => Promise<void>`                                                          | Marks an item as saved with its size by updating `savedFilesDb` in memory and persisting it back to `fetchtv.json`.                                                                                                                                                     |
-| `tsToSeconds`           | `(timestamp) => number`                                                                                              | Parses a `HH:MM:SS` / `MM:SS` / `SS` string into seconds; returns `0` for non-string or malformed input.                                                                                                                                                                |
-| `processFilter`         | `(arr) => string[]`                                                                                                  | Normalizes an array of filter strings: splits on commas, trims, lowercases, drops empties. Used to build the `filters` argument for `getFetchRecordings`.                                                                                                               |
-| `sortRecordingsByTitle` | `(recordings) => Recording[]`                                                                                        | Sorts shows alphabetically, ignoring a leading "The " prefix. Returns a deep clone — does not mutate the input.                                                                                                                                                         |
+| Export                  | Signature                                                                                                                             | Returns                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `discoverFetchServers`  | `({ timeoutMs = 3000 } = {}) => Promise<Server[]>`                                                                                    | Every Fetch TV device found on the LAN via SSDP. Empty array if none.                                                                                                                                                                                                                                                                                                     |
+| `discoverFetch`         | `({ ip, port }) => Promise<Location \| null>`                                                                                         | First Fetch TV device matching the given `ip`/`port` (or first found via SSDP if `ip` is omitted), with the full `_rawDeviceXml` payload needed by `getFetchRecordings` and friends.                                                                                                                                                                                      |
+| `getFetchRecordings`    | `({ location, filters }) => Promise<Show[]>`                                                                                          | Show folders and their items. See example above for `filters` shape.                                                                                                                                                                                                                                                                                                      |
+| `downloadFile`          | `({ item, filePath, progressBar, overwrite }) => Promise<{ recorded, resumed?, size?, error?, warning? }>`                            | Streams a recording to `<filePath>.part` and renames it to `filePath` once its size matches. Resumes an existing `.part` file, or a shorter file at `filePath`. The caller must own `filePath`: `downloadFile` does not check `fetchtv.json`.                                                                                                                             |
+| `isCurrentlyRecording`  | `(item) => Promise<boolean>`                                                                                                          | Whether an item is still being recorded (vs. a complete file).                                                                                                                                                                                                                                                                                                            |
+| `formatItem`            | `(item) => string`                                                                                                                    | Human-readable description (title, size, duration).                                                                                                                                                                                                                                                                                                                       |
+| `createValidFilename`   | `(name) => string`                                                                                                                    | Filesystem-safe version of a string (strips/replaces problematic characters).                                                                                                                                                                                                                                                                                             |
+| `processPathTemplate`   | `({ templateString, data }) => string`                                                                                                | Substitutes the [template variables](#template-variables) in a path template. Throws if the template uses a variable with no value.                                                                                                                                                                                                                                       |
+| `parseXml`              | `(xmlString) => object \| null`                                                                                                       | Parses an XML string (SOAP envelopes, MediaServer.xml, etc.) with the same fast-xml-parser options the CLI uses. Returns `null` on empty/invalid input.                                                                                                                                                                                                                   |
+| `parseLocations`        | `(urls) => Promise<Location[]>`                                                                                                       | Fetches and parses an array of UPnP MediaServer.xml URLs into Location objects. Useful if you have device URLs from somewhere other than SSDP.                                                                                                                                                                                                                            |
+| `getApiService`         | `(location) => Promise<{ cd_ctr, cd_service } \| null>`                                                                               | Extracts the ContentDirectory control URL + service URN from a Location. Required to use the lower-level browse helpers below.                                                                                                                                                                                                                                            |
+| `findDirectories`       | `({ apiService, objectId }) => Promise<Container[]>`                                                                                  | Lists child containers (folders) under a UPnP ObjectID — e.g. enumerate "Recordings" by passing the root's object id.                                                                                                                                                                                                                                                     |
+| `findItems`             | `({ apiService, objectId, showTitle }) => Promise<Item[]>`                                                                            | Lists items (recordings) under a UPnP container, with season/episode numbers parsed from titles and the file extension inferred from `protocolInfo`.                                                                                                                                                                                                                      |
+| `browseRequest`         | `({ apiService, objectId }) => Promise<object \| null>`                                                                               | Raw SOAP Browse, returns the parsed DIDL-Lite payload. Use this if you need attributes neither `findItems` nor `findDirectories` surface.                                                                                                                                                                                                                                 |
+| `saveRecordings`        | `({ recordings, savePath, template, forPlex = false, overwrite, concurrency = 2, retryDelays = [5000, 15000] }) => Promise<Result[]>` | Higher-level batch save: takes the output of `getFetchRecordings`, writes each item to disk with resume, retry, and lock-file handling, and updates the saved-files DB. It never writes over a file that `fetchtv.json` does not list; it uses a `- copy N` name instead. Each result has a `status`: `saved`, `already_saved`, `still_recording`, `locked`, or `failed`. |
+| `loadSavedFiles`        | `(savePath) => Promise<Record<string, { title, size?, path? } \| string>>`                                                            | Reads `fetchtv.json` from `savePath`: id → `{ title, size, path }`, where `path` is relative to `savePath` and `size` is set once the save is complete. Older files map id → `{ title, size }` or id → title. Returns `{}` if missing or unreadable.                                                                                                                      |
+| `addSavedFile`          | `({ savePath, savedFilesDb, item, size, filePath }) => Promise<void>`                                                                 | Marks an item as saved with its size (and its path, when `filePath` is given) by updating `savedFilesDb` in memory and writing it back to `fetchtv.json`.                                                                                                                                                                                                                 |
+| `tsToSeconds`           | `(timestamp) => number`                                                                                                               | Parses a `HH:MM:SS` / `MM:SS` / `SS` string into seconds; returns `0` for non-string or malformed input.                                                                                                                                                                                                                                                                  |
+| `processFilter`         | `(arr) => string[]`                                                                                                                   | Normalizes an array of filter strings: splits on commas, trims, lowercases, drops empties. Used to build the `filters` argument for `getFetchRecordings`.                                                                                                                                                                                                                 |
+| `sortRecordingsByTitle` | `(recordings) => Recording[]`                                                                                                         | Sorts shows alphabetically, ignoring a leading "The " prefix. Returns a deep clone — does not mutate the input.                                                                                                                                                                                                                                                           |
 
 `isCurrentlyRecording` / `downloadFile` recognise two distinct "still recording" sentinels in the UPnP directory listing: the `4398046510080`-byte marker, and any non-positive size (typically `-1`, used by Fetch TV when a recording has started but its final size isn't known yet). Both cause `downloadFile` to refuse the download — partial bytes from an in-progress recording would otherwise be written out as a truncated file.
 
@@ -476,18 +521,18 @@ npm test
 
 Tests use Node's built-in `node:test` runner (no external framework) and [`nock`](https://github.com/nock/nock) to intercept HTTP. The CLI-level tests in `test/commands.test.js` stand up a local `http.createServer` and spawn `node fetchtv.js --ip 127.0.0.1 --port <random>` against it.
 
-| File                          | What it covers                                                                                                                                                 |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `helpers.test.js`             | Pure helpers: filename sanitization, timestamp parsing, filter normalization, "The"-prefix-aware sort, XML node navigation, item projection                    |
-| `xml.test.js`                 | `parseXml` against a Browse-shaped fixture with >1000 entity references (regression catch for `fast-xml-parser` entity-expansion cap changes)                  |
-| `didl.test.js`                | DIDL-Lite item/container parsing: S/E number extraction, extension inference from `protocolInfo`, size/duration coercion                                       |
-| `discovery.test.js`           | `discoverFetch` via explicit `--ip`, including the non-Fetch and unreachable cases                                                                             |
-| `filters.test.js`             | `--show` / `--exclude` / `--title` filter behaviour end-to-end through `getFetchRecordings`                                                                    |
-| `recording-detection.test.js` | `isCurrentlyRecording` size sentinels and HEAD/GET fallback paths                                                                                              |
-| `templates.test.js`           | `processPathTemplate`: standard placeholders, Plex template, missing-placeholder throw, traversal sanitization                                                 |
-| `save.test.js`                | `loadSavedFiles` / `addSavedFile`, `isLockFileStale`, end-to-end save flow with a mocked download                                                              |
-| `save-reliability.test.js`    | Local HTTP server serving full, short, and reset bodies: size checks, retries with `Range` resume, skip of complete files, final summary line, `--concurrency` |
-| `commands.test.js`            | Spawned CLI: `info` / `recordings` / `shows`, prefix-matched commands, `--show` / `--exclude` / `--title`, `--is-recording`, `--json`, `--for-plex`            |
+| File                          | What it covers                                                                                                                                                                                                                                                                           |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `helpers.test.js`             | Pure helpers: filename sanitization, timestamp parsing, filter normalization, "The"-prefix-aware sort, XML node navigation, item projection                                                                                                                                              |
+| `xml.test.js`                 | `parseXml` against a Browse-shaped fixture with >1000 entity references (regression catch for `fast-xml-parser` entity-expansion cap changes)                                                                                                                                            |
+| `didl.test.js`                | DIDL-Lite item/container parsing: S/E number extraction, extension inference from `protocolInfo`, size/duration coercion                                                                                                                                                                 |
+| `discovery.test.js`           | `discoverFetch` via explicit `--ip`, including the non-Fetch and unreachable cases                                                                                                                                                                                                       |
+| `filters.test.js`             | `--show` / `--exclude` / `--title` filter behaviour end-to-end through `getFetchRecordings`                                                                                                                                                                                              |
+| `recording-detection.test.js` | `isCurrentlyRecording` size sentinels and HEAD/GET fallback paths                                                                                                                                                                                                                        |
+| `templates.test.js`           | `processPathTemplate`: standard placeholders, Plex template, missing-placeholder throw, traversal sanitization                                                                                                                                                                           |
+| `save.test.js`                | `loadSavedFiles` / `addSavedFile`, `isLockFileStale`, end-to-end save flow with a mocked download                                                                                                                                                                                        |
+| `save-reliability.test.js`    | Local HTTP server serving full, short, and reset bodies: size checks, retries with `Range` resume from `.part` files, skip of complete files, `- copy N` names beside files fetchtv did not save, `--for-plex` season folders, show folder matching, final summary line, `--concurrency` |
+| `commands.test.js`            | Spawned CLI: `info` / `recordings` / `shows`, prefix-matched commands, `--show` / `--exclude` / `--title`, `--is-recording`, `--json`, `--for-plex`                                                                                                                                      |
 
 Tests run locally only — there's no CI gate.
 
