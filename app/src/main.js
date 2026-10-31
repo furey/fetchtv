@@ -30,7 +30,8 @@ const main = () => {
   app.setAboutPanelOptions({
     applicationName: 'fetchtv',
     applicationVersion: FETCHTV_VERSION,
-    copyright: 'Free software under the GPL-3.0-or-later licence. Not affiliated with Fetch TV.'
+    copyright: 'Free and open source under the GPL-3.0-or-later licence.',
+    credits: 'fetchtv is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner.'
   })
   app.on('second-instance', focusWindow)
   app.on('window-all-closed', () => app.quit())
@@ -40,6 +41,7 @@ const main = () => {
 }
 
 const start = () => {
+  nativeTheme.themeSource = 'dark'
   const settings = createSettings(app.getPath('userData'))
   blockRemoteRequests()
   Menu.setApplicationMenu(buildMenu())
@@ -49,14 +51,14 @@ const start = () => {
 
 const createWindow = () => {
   const window = new BrowserWindow({
-    width: 940,
-    height: 780,
+    width: 1000,
+    height: 820,
     minWidth: 640,
     minHeight: 560,
     title: 'fetchtv',
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff',
+    backgroundColor: '#0b1117',
     webPreferences: {
       preload: path.join(distDir, 'preload.cjs'),
       contextIsolation: true,
@@ -142,6 +144,11 @@ const registerIpc = (settings) => {
   handle('folder:open', async () => {
     if (!state.savedFolder) return {}
     await shell.openPath(state.savedFolder)
+    return {}
+  })
+
+  handle('settings:sound', async ({ on }) => {
+    await settings.update({ sound: Boolean(on) })
     return {}
   })
 

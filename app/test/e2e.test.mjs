@@ -31,7 +31,7 @@ test('first run: no box found, type the address, choose episodes, save in the de
   await fs.writeFile(path.join(userData, 'settings.json'), JSON.stringify({ lastAddress: UNREACHABLE_ADDRESS }))
   const app = await launchApp({ userData })
   try {
-    const page = await app.firstWindow()
+    const page = await openApp(app)
     await page.getByRole('heading', { name: 'Looking for your Fetch box' }).waitFor()
     await capture({ app, page, name: '1-searching' })
     await page.getByRole('heading', { name: 'No Fetch box found' }).waitFor({ timeout: 20000 })
@@ -53,11 +53,11 @@ test('first run: no box found, type the address, choose episodes, save in the de
     await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
 
     const harbour = page.locator('li.show-row[data-show="Harbour Lights"]')
-    await harbour.getByRole('button', { name: 'Choose episodes' }).click()
+    await harbour.locator('.row-main').first().click()
     await harbour.getByLabel('S1 E4 - Safe Harbour').uncheck()
     assert.equal(await harbour.locator('.row-main input[type="checkbox"]').first().evaluate(input => input.indeterminate), true)
     const coastal = page.locator('li.show-row[data-show="Coastal Kitchen"]')
-    await coastal.getByRole('button', { name: 'Choose episodes' }).click()
+    await coastal.locator('.row-main').first().click()
     assert.equal(await coastal.getByLabel('S2 E6 - Sourdough').isDisabled(), true)
     await capture({ app, page, name: '2-recordings-episodes' })
     await page.getByText('8 recordings selected').waitFor()
@@ -67,7 +67,7 @@ test('first run: no box found, type the address, choose episodes, save in the de
     await stubFolderPicker({ app, folder: saveFolder })
     await page.getByRole('button', { name: 'Change folder' }).click()
     await page.locator('#folder-path', { hasText: saveFolder }).waitFor()
-    await page.getByText(/Free space: .* These recordings need about/).waitFor()
+    await page.getByText('These recordings need about').waitFor()
     await capture({ app, page, name: '3-folder' })
 
     await page.getByRole('button', { name: 'Start saving' }).click()
@@ -102,7 +102,7 @@ test('next run: remembers the box and folder, saves in the Plex layout, then ski
   await fs.writeFile(path.join(userData, 'settings.json'), JSON.stringify({ lastAddress: box.address, lastFolder: saveFolder }))
   const app = await launchApp({ userData })
   try {
-    const page = await app.firstWindow()
+    const page = await openApp(app)
     await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
     await page.getByRole('button', { name: 'Select none' }).click()
     assert.equal(await page.getByRole('button', { name: 'Next' }).isDisabled(), true)
@@ -148,7 +148,7 @@ test('stop part way, then save again carries on from the partial file', async ()
   await fs.writeFile(path.join(userData, 'settings.json'), JSON.stringify({ lastAddress: box.address, lastFolder: saveFolder }))
   const app = await launchApp({ userData })
   try {
-    const page = await app.firstWindow()
+    const page = await openApp(app)
     await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
     await page.getByRole('button', { name: 'Next' }).click()
     await page.getByRole('button', { name: 'Start saving' }).click()
@@ -186,7 +186,7 @@ test('a recording the box keeps cutting off is listed as not saved, with a plain
   await fs.writeFile(path.join(userData, 'settings.json'), JSON.stringify({ lastAddress: box.address, lastFolder: saveFolder }))
   const app = await launchApp({ userData })
   try {
-    const page = await app.firstWindow()
+    const page = await openApp(app)
     await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
     await page.getByRole('button', { name: 'Next' }).click()
     await page.getByRole('button', { name: 'Start saving' }).click()
@@ -207,7 +207,7 @@ test('a box with no recordings explains why the list is empty', async () => {
   await fs.writeFile(path.join(userData, 'settings.json'), JSON.stringify({ lastAddress: box.address }))
   const app = await launchApp({ userData })
   try {
-    const page = await app.firstWindow()
+    const page = await openApp(app)
     await page.getByRole('heading', { name: 'No recordings on this Fetch box' }).waitFor()
     await page.getByText('A Fetch box whose account is cancelled shows its setup screen on the TV and lists no recordings.').waitFor()
     await capture({ app, page, name: '2-empty' })
@@ -223,7 +223,7 @@ test('the window is locked down: isolated, sandboxed, no Node in the page, stric
   await fs.writeFile(path.join(userData, 'settings.json'), JSON.stringify({ lastAddress: box.address }))
   const app = await launchApp({ userData })
   try {
-    const page = await app.firstWindow()
+    const page = await openApp(app)
     const consoleErrors = []
     page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()) })
     await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
@@ -240,7 +240,7 @@ test('the window is locked down: isolated, sandboxed, no Node in the page, stric
     }))
     assert.equal(pageGlobals.require, 'undefined')
     assert.equal(pageGlobals.process, 'undefined')
-    assert.ok(pageGlobals.api.every(name => typeof name === 'string') && pageGlobals.api.length === 13)
+    assert.ok(pageGlobals.api.every(name => typeof name === 'string') && pageGlobals.api.length === 14)
     const inlineScriptRan = await page.evaluate(() => new Promise(resolve => {
       window.inlineRan = false
       const script = document.createElement('script')
@@ -263,8 +263,7 @@ test('discovery: finds a Fetch box on the network without typing an address', { 
   const userData = await freshDir('user-data-ssdp')
   const app = await launchApp({ userData, discovery: true })
   try {
-    const page = await app.firstWindow()
-    await page.getByRole('heading', { name: 'Looking for your Fetch box' }).waitFor()
+    const page = await openApp(app)
     const listed = page.getByRole('heading', { name: 'Choose the recordings to save' })
     const choose = page.getByRole('heading', { name: 'Choose your Fetch box' })
     await Promise.race([listed.waitFor({ timeout: 20000 }), choose.waitFor({ timeout: 20000 })])
@@ -273,7 +272,7 @@ test('discovery: finds a Fetch box on the network without typing an address', { 
       await page.getByRole('button', { name: /Fake Fetch Box/ }).click()
       await listed.waitFor()
     }
-    await page.getByText(`Fetch box: Fake Fetch Box, IP address ${box.address}`).waitFor()
+    await page.locator('#box-card', { hasText: 'Fake Fetch Box' }).getByText(box.address).waitFor()
   } finally {
     await app.close()
     await box.stop()
@@ -293,6 +292,15 @@ const launchApp = async ({ userData, discovery = false }) => {
   return app
 }
 
+const openApp = async (app) => {
+  const page = await app.firstWindow()
+  await page.getByRole('heading', { name: 'Copy your Fetch recordings' }).waitFor()
+  await page.getByText('It is not made, endorsed, or supported by Fetch TV.').waitFor()
+  await capture({ app, page, name: '0-welcome' })
+  await page.getByRole('button', { name: 'Start', exact: true }).click()
+  return page
+}
+
 const stubFolderPicker = ({ app, folder }) => app.evaluate(({ dialog }, chosen) => {
   dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [chosen] })
 }, folder)
@@ -300,12 +308,8 @@ const stubFolderPicker = ({ app, folder }) => app.evaluate(({ dialog }, chosen) 
 const capture = async ({ app, page, name }) => {
   if (!screenshotDir) return
   await page.mouse.move(0, 0)
-  for (const theme of ['light', 'dark']) {
-    await page.emulateMedia({ colorScheme: theme })
-    await page.waitForTimeout(150)
-    await page.screenshot({ path: path.join(screenshotDir, `${name}-${theme}.png`) })
-  }
-  await page.emulateMedia({ colorScheme: null })
+  await page.waitForTimeout(200)
+  await page.screenshot({ path: path.join(screenshotDir, `${name}.png`) })
 }
 
 const totals = (page) => page.locator('#save-totals').evaluate(list => {

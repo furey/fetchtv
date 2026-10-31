@@ -4,7 +4,8 @@ const api = window.fetchtv
 
 const state = {
   info: null,
-  step: 1,
+  step: 0,
+  pendingSearch: null,
   boxes: [],
   box: null,
   shows: [],
@@ -21,18 +22,42 @@ const start = async () => {
   state.folder = state.info.settings.lastFolder || state.info.defaultFolder
   state.forPlex = Boolean(state.info.settings.forPlex)
   document.getElementById('about-line').textContent =
-    `fetchtv ${state.info.version} · Free software (GPL-3.0-or-later) · Not affiliated with Fetch TV`
+    `fetchtv ${state.info.version} · Free and open source (GPL-3.0-or-later) · Not affiliated with Fetch TV`
   document.getElementById('project-link').addEventListener('click', () => api.openProjectPage())
+  setUpSoundToggle(state.info.settings.sound !== false)
   api.onListProgress(showListProgress)
   api.onSaveProgress(updateSaveProgress)
   api.onSaveResult(updateSaveResult)
+  state.pendingSearch = api.findBoxes()
+  showScreen(0, welcomeScreen())
+}
+
+const setUpSoundToggle = (on) => {
+  const toggle = document.getElementById('sound-toggle')
+  const apply = (value) => {
+    sounds.setEnabled(value)
+    toggle.setAttribute('aria-checked', String(value))
+  }
+  apply(on)
+  toggle.addEventListener('click', () => {
+    const value = !sounds.isEnabled()
+    apply(value)
+    api.setSound({ on: value })
+  })
+}
+
+const begin = () => {
+  sounds.play('start')
   searchForBoxes({ autoPick: true })
 }
 
 const searchForBoxes = async ({ autoPick }) => {
   showScreen(1, searchingScreen())
-  const { boxes } = await api.findBoxes()
+  const search = state.pendingSearch ?? api.findBoxes()
+  state.pendingSearch = null
+  const { boxes } = await search
   state.boxes = boxes
+  sounds.play(boxes.length === 0 ? 'failed' : 'found')
   if (autoPick && boxes.length === 1) return useBox(boxes[0])
   showScreen(1, boxes.length === 0 ? notFoundScreen() : chooseBoxScreen())
 }
@@ -44,7 +69,10 @@ const useBox = async (box) => {
   state.open = new Set()
   showScreen(2, loadingListScreen())
   const result = await api.listRecordings({ boxId: box.id })
-  if (result.error) return showScreen(2, listFailedScreen())
+  if (result.error) {
+    sounds.play('failed')
+    return showScreen(2, listFailedScreen())
+  }
   state.shows = result.shows
   state.selected = new Set(savableEpisodes(state.shows).map(episode => episode.id))
   showScreen(2, state.shows.length === 0 ? emptyListScreen() : recordingsScreen())
@@ -59,7 +87,11 @@ const connectByAddress = async ({ address, form }) => {
   const result = await api.connectToBox({ address })
   button.disabled = false
   button.textContent = 'Connect'
-  if (result.box) return useBox(result.box)
+  if (result.box) {
+    sounds.play('found')
+    return useBox(result.box)
+  }
+  if (result.error !== 'invalid-address') sounds.play('failed')
   message.textContent = result.error === 'invalid-address'
     ? 'Type the address as four numbers with dots between them, such as 192.168.1.50.'
     : `No Fetch box answered at ${address.trim()}. Check the address, and check that the box is turned on.`
@@ -93,40 +125,68 @@ const beginSave = async () => {
     rows: new Map(order.map(episode => [episode.id, { status: 'waiting', bytes: 0, total: episode.size, firstBytes: null, reason: '' }])),
     elements: new Map(),
     startedAt: Date.now(),
-    stopping: false,
     summary: null
   }
   showScreen(4, savingScreen())
   const result = await api.startSave({ folder: state.folder, forPlex: state.forPlex, episodeIds: order.map(episode => episode.id) })
   state.save.summary = result.summary ?? null
   state.save.error = result.error ?? null
+  playFinishSound(state.save.summary)
   showScreen(4, finishedScreen())
 }
 
+const playFinishSound = (summary) => {
+  if (!summary) return sounds.play('failed')
+  if (summary.stopped > 0) return
+  sounds.play(summary.notSaved > 0 ? 'failed' : 'finished')
+}
+
 const stopSave = async (button) => {
-  state.save.stopping = true
   button.disabled = true
   button.textContent = 'Stopping…'
   await api.cancelSave()
 }
 
+const welcomeScreen = () => ({
+  content: [
+    h('section', { className: 'welcome' },
+      markElement({ large: true }),
+      h('h1', {}, 'Copy your Fetch recordings'),
+      h('p', { className: 'lead' }, 'fetchtv copies the recordings on your Fetch box to a folder on this computer, so you can keep them and watch them anywhere.'),
+      h('ol', { className: 'how' },
+        h('li', {}, 'Find the Fetch box on your home network'),
+        h('li', {}, 'Choose the recordings you want'),
+        h('li', {}, 'Choose a folder, then save')),
+      h('p', { className: 'reassure' },
+        'fetchtv is free and open source. It talks only to your Fetch box, on your home network. It needs no Fetch account, and it deletes nothing from the box.'),
+      h('p', { className: 'reassure', id: 'independence' },
+        'fetchtv is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner.'))
+  ],
+  actions: [
+    h('span', { className: 'spacer' }),
+    h('button', { type: 'button', className: 'btn primary', id: 'start', onclick: begin }, 'Start'),
+    h('span', { className: 'spacer' })
+  ]
+})
+
 const searchingScreen = () => ({
   content: [
     h('h1', {}, 'Looking for your Fetch box'),
-    h('p', {}, 'fetchtv is searching your home network. This takes up to 10 seconds.'),
-    busyBar()
+    h('p', { className: 'lead' }, 'fetchtv is searching your home network. This takes up to 10 seconds.'),
+    h('div', { className: 'progress is-busy searching', role: 'progressbar', 'aria-label': 'Searching' }, h('span', {}))
   ]
 })
 
 const notFoundScreen = () => ({
   content: [
+    illustration('no-box'),
     h('h1', {}, 'No Fetch box found'),
-    h('p', {}, 'Check that:'),
-    h('ul', { className: 'plain' },
-      h('li', {}, 'the Fetch box is turned on'),
-      h('li', {}, 'this computer is on the same Wi-Fi or home network as the Fetch box')),
-    h('p', {}, 'Then search again, or type the IP address of the Fetch box below.'),
-    h('p', {}, h('button', { type: 'button', className: 'button', onclick: () => searchForBoxes({ autoPick: true }) }, 'Search again')),
+    h('p', { className: 'lead' }, 'Check these, then search again:'),
+    h('ul', { className: 'checks' },
+      h('li', {}, 'The Fetch box is turned on.'),
+      h('li', {}, 'This computer is on the same Wi-Fi or home network as the Fetch box.')),
+    h('p', {}, h('button', { type: 'button', className: 'btn', onclick: () => searchForBoxes({ autoPick: true }) }, 'Search again')),
+    h('h2', {}, 'Or type its IP address'),
     addressForm()
   ]
 })
@@ -134,16 +194,17 @@ const notFoundScreen = () => ({
 const chooseBoxScreen = () => ({
   content: [
     h('h1', {}, state.boxes.length > 1 ? 'Choose your Fetch box' : 'Fetch box found'),
-    h('p', {}, state.boxes.length > 1
+    h('p', { className: 'lead' }, state.boxes.length > 1
       ? 'There is more than one Fetch box on your network. Choose the one with your recordings.'
       : 'Choose the box to copy recordings from.'),
     h('ul', { className: 'table' }, ...state.boxes.map(box => h('li', { className: 'row' },
       h('button', { type: 'button', className: 'choice', onclick: () => useBox(box) },
+        h('span', { className: 'box-dot' }),
         h('span', { className: 'row-text' },
           h('span', { className: 'row-title' }, box.name),
-          h('span', { className: 'row-detail' }, [box.model, `IP address ${box.address}`].filter(Boolean).join(' · ')))))
-    )),
-    h('p', { className: 'small' }, h('button', { type: 'button', className: 'link', onclick: () => searchForBoxes({ autoPick: false }) }, 'Search again')),
+          h('span', { className: 'row-detail mono' }, box.address)))))),
+    h('p', {}, h('button', { type: 'button', className: 'link', onclick: () => searchForBoxes({ autoPick: false }) }, 'Search again')),
+    h('h2', {}, 'Or type its IP address'),
     addressForm()
   ]
 })
@@ -157,16 +218,15 @@ const addressForm = () => {
     spellcheck: false,
     value: state.info.settings.lastAddress ?? ''
   })
-  const form = h('form', { className: 'address-form', novalidate: true },
-    h('h2', {}, 'Type the IP address'),
+  const form = h('form', { className: 'panel address-form', novalidate: true },
     h('div', { className: 'field' },
       h('label', { htmlFor: 'box-address' }, 'IP address of the Fetch box'),
       input,
-      h('button', { type: 'submit', className: 'button primary' }, 'Connect')),
-    h('p', { className: 'form-message error-text', role: 'alert' }),
-    h('p', { className: 'muted small' },
-      'The IP address is four numbers with dots between them, such as 192.168.1.50. ' +
-      'To find it, look in your router’s list of connected devices, or in the network details of the Fetch box’s settings menu.'))
+      h('button', { type: 'submit', className: 'btn' }, 'Connect')),
+    h('p', { className: 'form-message', role: 'alert' }),
+    h('p', { className: 'hint' },
+      'Four numbers with dots between them, such as 192.168.1.50. ' +
+      'Find it in your router’s list of connected devices, or in the network details of the Fetch box’s settings menu.'))
   form.addEventListener('submit', (event) => {
     event.preventDefault()
     connectByAddress({ address: input.value, form })
@@ -176,10 +236,10 @@ const addressForm = () => {
 
 const loadingListScreen = () => ({
   content: [
-    boxLine(),
+    boxCard(),
     h('h1', {}, 'Reading your recordings'),
-    h('p', { id: 'list-progress' }, 'Asking the Fetch box for its list of recordings…'),
-    busyBar()
+    h('p', { className: 'lead', id: 'list-progress' }, 'Asking the Fetch box for its list of recordings…'),
+    h('div', { className: 'progress is-busy searching', role: 'progressbar', 'aria-label': 'Reading' }, h('span', {}))
   ]
 })
 
@@ -190,49 +250,54 @@ const showListProgress = ({ done, total }) => {
 
 const emptyListScreen = () => ({
   content: [
-    boxLine(),
+    boxCard(),
+    illustration('no-recordings'),
     h('h1', {}, 'No recordings on this Fetch box'),
-    h('p', {}, 'The box answered, but it lists no recordings to copy.'),
+    h('p', { className: 'lead' }, 'The box answered, but it lists no recordings to copy.'),
     h('p', {}, 'A Fetch box whose account is cancelled shows its setup screen on the TV and lists no recordings.'),
-    h('p', {}, h('button', { type: 'button', className: 'button', onclick: () => useBox(state.box) }, 'Check again'))
+    h('p', {}, h('button', { type: 'button', className: 'btn', onclick: () => useBox(state.box) }, 'Check again'))
   ]
 })
 
 const listFailedScreen = () => ({
   content: [
-    boxLine(),
+    boxCard(),
     h('h1', {}, 'Could not read the recordings'),
-    h('p', {}, 'The Fetch box did not send its list of recordings. Check that the box is turned on, then try again.'),
-    h('p', {}, h('button', { type: 'button', className: 'button', onclick: () => useBox(state.box) }, 'Try again'))
+    h('p', { className: 'lead' }, 'The Fetch box did not send its list of recordings. Check that the box is turned on, then try again.'),
+    h('p', {}, h('button', { type: 'button', className: 'btn', onclick: () => useBox(state.box) }, 'Try again'))
   ]
 })
 
-const boxLine = () => h('p', { className: 'muted small' },
-  `Fetch box: ${state.box.name}, IP address ${state.box.address} `,
+const boxCard = () => h('div', { className: 'box-card', id: 'box-card' },
+  h('span', { className: 'box-dot' }),
+  h('span', { className: 'box-text' },
+    h('span', { className: 'box-name' }, state.box.name),
+    h('span', { className: 'box-address mono' }, state.box.address)),
   h('button', { type: 'button', className: 'link', onclick: () => searchForBoxes({ autoPick: false }) }, 'Use a different box'))
 
 const recordingsScreen = () => {
   const summary = h('span', { className: 'summary', id: 'selection-summary' })
-  const next = h('button', { type: 'button', className: 'button primary', id: 'next-to-folder', onclick: goToFolderStep }, 'Next')
+  const next = h('button', { type: 'button', className: 'btn primary', id: 'next-to-folder', onclick: goToFolderStep }, 'Next')
+  const allButton = h('button', { type: 'button', className: 'segment', onclick: () => { selectAll(); refreshAll() } }, 'Select all')
+  const noneButton = h('button', { type: 'button', className: 'segment', onclick: () => { state.selected.clear(); refreshAll() } }, 'Select none')
   const rows = state.shows.map(showRow)
   const refreshAll = () => {
     rows.forEach(row => row.refresh())
-    refreshSelectionSummary({ summary, next })
+    refreshSelectionSummary({ summary, next, allButton, noneButton })
   }
   rows.forEach(row => { row.onChange = refreshAll })
-  refreshSelectionSummary({ summary, next })
+  refreshSelectionSummary({ summary, next, allButton, noneButton })
   return {
     content: [
-      boxLine(),
+      boxCard(),
       h('h1', {}, 'Choose the recordings to save'),
-      h('div', { className: 'toolbar' },
-        h('button', { type: 'button', className: 'button', onclick: () => { selectAll(); refreshAll() } }, 'Select all'),
-        h('button', { type: 'button', className: 'button', onclick: () => { state.selected.clear(); refreshAll() } }, 'Select none')),
+      h('p', { className: 'meta' }, 'Press a show to choose single episodes.'),
+      h('div', { className: 'toolbar' }, h('div', { className: 'segmented', role: 'group', 'aria-label': 'Selection' }, allButton, noneButton)),
       h('ul', { className: 'table', id: 'show-list' }, ...rows.map(row => row.element))
     ],
     actions: [
       summary,
-      h('button', { type: 'button', className: 'button', onclick: () => searchForBoxes({ autoPick: false }) }, 'Back'),
+      h('button', { type: 'button', className: 'btn quiet', onclick: () => searchForBoxes({ autoPick: false }) }, 'Back'),
       next
     ]
   }
@@ -240,16 +305,34 @@ const recordingsScreen = () => {
 
 const showRow = (show) => {
   const savable = show.episodes.filter(episode => !episode.stillRecording)
-  const checkbox = h('input', { type: 'checkbox', disabled: savable.length === 0 })
+  const hasDrawer = show.episodes.length > 1
+  const checkbox = h('input', { type: 'checkbox', disabled: savable.length === 0, 'aria-label': show.title })
   const row = { onChange: () => {} }
   const episodeRows = show.episodes.map(episode => episodeRow({ episode, onChange: () => row.onChange() }))
-  const drawer = h('ul', { className: 'drawer', hidden: !state.open.has(show.id) }, ...episodeRows.map(item => item.element))
-  const toggle = h('button', {
-    type: 'button',
-    className: 'button row-button',
-    'aria-expanded': String(state.open.has(show.id)),
-    onclick: () => toggleDrawer({ show, drawer, toggle })
-  }, state.open.has(show.id) ? 'Hide episodes' : 'Choose episodes')
+  const drawer = hasDrawer ? h('ul', { className: 'drawer', hidden: !state.open.has(show.id) }, ...episodeRows.map(item => item.element)) : null
+  const side = h('span', { className: 'row-side' })
+  const reveal = h('span', { className: 'row-reveal' })
+  const main = h('div', { className: `row-main${savable.length > 0 || hasDrawer ? ' is-clickable' : ''}` },
+    h('label', { className: 'check', onclick: (event) => event.stopPropagation() }, checkbox),
+    h('span', { className: 'row-text' },
+      h('span', { className: 'row-title' }, show.title),
+      h('span', { className: 'row-detail' }, showDetail(show))),
+    h('span', { className: 'row-side' }, hasDrawer ? reveal : null, hasDrawer ? h('br', {}) : null, side))
+
+  if (hasDrawer) {
+    main.setAttribute('role', 'button')
+    main.setAttribute('tabindex', '0')
+    main.setAttribute('aria-expanded', String(state.open.has(show.id)))
+    const toggle = () => toggleDrawer({ show, drawer, main, reveal })
+    main.addEventListener('click', toggle)
+    main.addEventListener('keydown', (event) => {
+      if (event.target !== main || (event.key !== 'Enter' && event.key !== ' ')) return
+      event.preventDefault()
+      toggle()
+    })
+  } else {
+    main.addEventListener('click', () => { if (!checkbox.disabled) checkbox.click() })
+  }
 
   checkbox.addEventListener('change', () => {
     savable.forEach(episode => checkbox.checked ? state.selected.add(episode.id) : state.selected.delete(episode.id))
@@ -260,64 +343,64 @@ const showRow = (show) => {
     const chosen = savable.filter(episode => state.selected.has(episode.id)).length
     checkbox.checked = chosen > 0 && chosen === savable.length
     checkbox.indeterminate = chosen > 0 && chosen < savable.length
+    side.textContent = hasDrawer ? `${chosen} of ${show.episodes.length}` : formatBytes(sumSizes(show.episodes))
+    side.className = 'row-side-value mono'
+    reveal.textContent = state.open.has(show.id) ? 'Hide episodes' : 'Show episodes'
     episodeRows.forEach(item => item.refresh())
   }
   row.refresh()
 
-  row.element = h('li', { className: 'row show-row', 'data-show': show.title },
-    h('div', { className: 'row-main' },
-      h('label', { className: `row-pick${savable.length === 0 ? ' disabled' : ''}` },
-        checkbox,
-        h('span', { className: 'row-text' },
-          h('span', { className: 'row-title' }, show.title),
-          h('span', { className: 'row-detail' }, showDetail(show)))),
-      show.episodes.length > 1 ? toggle : null),
-    show.episodes.length > 1 ? drawer : null)
+  row.element = h('li', { className: 'row show-row', 'data-show': show.title }, main, drawer)
   return row
 }
 
 const episodeRow = ({ episode, onChange }) => {
-  const checkbox = h('input', { type: 'checkbox', disabled: episode.stillRecording })
+  const checkbox = h('input', { type: 'checkbox', disabled: episode.stillRecording, 'aria-label': episode.title })
   checkbox.addEventListener('change', () => {
     checkbox.checked ? state.selected.add(episode.id) : state.selected.delete(episode.id)
     onChange()
   })
   const detail = episode.stillRecording
     ? 'Still recording. Save it after the recording ends.'
-    : [formatDuration(episode.duration), formatBytes(episode.size)].filter(Boolean).join(' · ')
+    : formatDuration(episode.duration)
+  const main = h('div', { className: `row-main${episode.stillRecording ? '' : ' is-clickable'}` },
+    h('label', { className: 'check', onclick: (event) => event.stopPropagation() }, checkbox),
+    h('span', { className: 'row-text' },
+      h('span', { className: 'row-title' }, episode.title),
+      h('span', { className: 'row-detail' }, detail)),
+    h('span', { className: 'row-side mono' }, episode.stillRecording ? '' : formatBytes(episode.size)))
+  main.addEventListener('click', () => { if (!checkbox.disabled) checkbox.click() })
   return {
-    element: h('li', { className: 'row' },
-      h('div', { className: 'row-main' },
-        h('label', { className: `row-pick${episode.stillRecording ? ' disabled' : ''}` },
-          checkbox,
-          h('span', { className: 'row-text' },
-            h('span', { className: 'row-title' }, episode.title),
-            h('span', { className: 'row-detail' }, detail))))),
+    element: h('li', { className: 'row' }, main),
     refresh: () => { checkbox.checked = state.selected.has(episode.id) }
   }
 }
 
-const toggleDrawer = ({ show, drawer, toggle }) => {
+const toggleDrawer = ({ show, drawer, main, reveal }) => {
   const isOpen = state.open.has(show.id)
   isOpen ? state.open.delete(show.id) : state.open.add(show.id)
   drawer.hidden = isOpen
-  toggle.setAttribute('aria-expanded', String(!isOpen))
-  toggle.textContent = isOpen ? 'Choose episodes' : 'Hide episodes'
+  main.setAttribute('aria-expanded', String(!isOpen))
+  reveal.textContent = isOpen ? 'Show episodes' : 'Hide episodes'
 }
 
-const refreshSelectionSummary = ({ summary, next }) => {
-  const chosen = savableEpisodes(state.shows).filter(episode => state.selected.has(episode.id))
+const refreshSelectionSummary = ({ summary, next, allButton, noneButton }) => {
+  const all = savableEpisodes(state.shows)
+  const chosen = all.filter(episode => state.selected.has(episode.id))
   next.disabled = chosen.length === 0
-  summary.textContent = chosen.length === 0
-    ? 'Nothing selected'
-    : `${plural(chosen.length, 'recording')} selected · ${formatBytes(sumSizes(chosen))}`
+  allButton.setAttribute('aria-pressed', String(chosen.length === all.length && all.length > 0))
+  noneButton.setAttribute('aria-pressed', String(chosen.length === 0))
+  summary.replaceChildren(...(chosen.length === 0
+    ? ['Nothing selected']
+    : [h('strong', {}, `${plural(chosen.length, 'recording')} selected`), ' · ', h('span', { className: 'mono' }, formatBytes(sumSizes(chosen)))]))
 }
 
 const selectAll = () => savableEpisodes(state.shows).forEach(episode => state.selected.add(episode.id))
 
 const showDetail = (show) => {
   const recording = show.episodes.filter(episode => episode.stillRecording).length
-  const parts = [plural(show.episodes.length, 'recording'), formatBytes(sumSizes(show.episodes))]
+  const parts = [plural(show.episodes.length, 'recording')]
+  if (show.episodes.length > 1) parts.push(formatBytes(sumSizes(show.episodes)))
   if (recording > 0) parts.push(`${recording} still recording`)
   return parts.join(' · ')
 }
@@ -326,12 +409,12 @@ const folderScreen = () => {
   const plexSwitch = h('button', {
     type: 'button',
     role: 'switch',
-    className: 'switch',
+    className: 'toggle',
     id: 'plex-switch',
     'aria-checked': String(state.forPlex),
     'aria-labelledby': 'plex-label',
     'aria-describedby': 'plex-help'
-  })
+  }, h('span', { className: 'toggle-track' }, h('span', { className: 'toggle-knob' })))
   const example = h('span', { className: 'example', id: 'layout-example' })
   const refreshExample = () => {
     plexSwitch.setAttribute('aria-checked', String(state.forPlex))
@@ -346,24 +429,25 @@ const folderScreen = () => {
   return {
     content: [
       h('h1', {}, 'Choose where to save'),
-      h('p', {}, `fetchtv saves ${plural(chosen.length, 'recording')} (${formatBytes(sumSizes(chosen))}) into this folder, with a folder for each show.`),
-      h('div', { className: 'folder' },
-        h('span', { className: 'folder-path', id: 'folder-path' }, state.folder),
-        h('button', { type: 'button', className: 'button', id: 'change-folder', onclick: changeFolder }, 'Change folder')),
-      h('div', { id: 'folder-info', 'aria-live': 'polite' }),
-      h('div', { className: 'switch-row' },
+      h('p', { className: 'lead' }, `${plural(chosen.length, 'recording')}, with a folder for each show.`),
+      h('div', { className: 'panel' },
+        h('div', { className: 'folder' },
+          h('span', { className: 'folder-path', id: 'folder-path' }, state.folder),
+          h('button', { type: 'button', className: 'btn', id: 'change-folder', onclick: changeFolder }, 'Change folder')),
+        h('div', { id: 'folder-info', 'aria-live': 'polite' })),
+      h('div', { className: 'setting' },
         plexSwitch,
         h('div', {},
-          h('span', { className: 'switch-label', id: 'plex-label', onclick: () => plexSwitch.click() }, 'Name files for Plex, Jellyfin or Kodi'),
-          h('p', { className: 'muted small', id: 'plex-help' },
-            'Media library apps such as Plex, Jellyfin and Kodi need a folder for each season and the season and episode number in each file name. ' +
-            'Turn this on if you will watch the recordings in one of those apps. A recording without a season and episode number, such as a film, keeps its own name.'),
-          h('p', { className: 'small' }, 'Files are saved like this: ', example)))
+          h('span', { className: 'setting-title', id: 'plex-label', onclick: () => plexSwitch.click() }, 'Name files for Plex, Jellyfin or Kodi'),
+          h('p', { id: 'plex-help' },
+            'Media library apps need a folder for each season and the episode number in each file name. ' +
+            'Turn this on if you watch recordings in one of them. A film keeps its own name.'),
+          example))
     ],
     actions: [
       h('span', { className: 'spacer' }),
-      h('button', { type: 'button', className: 'button', onclick: () => showScreen(2, recordingsScreen()) }, 'Back'),
-      h('button', { type: 'button', className: 'button primary', id: 'start-save', onclick: beginSave }, 'Start saving')
+      h('button', { type: 'button', className: 'btn quiet', onclick: () => showScreen(2, recordingsScreen()) }, 'Back'),
+      h('button', { type: 'button', className: 'btn primary', id: 'start-save', onclick: beginSave }, 'Start saving')
     ]
   }
 }
@@ -374,7 +458,7 @@ const renderFolderInfo = () => {
   const info = state.folderInfo
   const startButton = document.getElementById('start-save')
   if (!info) {
-    box.replaceChildren(h('p', { className: 'muted' }, 'Checking the free space in this folder…'))
+    box.replaceChildren(h('p', { className: 'meta space' }, 'Checking the free space in this folder…'))
     if (startButton) startButton.disabled = true
     return
   }
@@ -384,18 +468,19 @@ const renderFolderInfo = () => {
 
 const folderInfoLines = (info) => {
   if (!info.canWrite) return [h('p', { className: 'notice', role: 'alert' }, 'fetchtv cannot save to this folder. Choose another folder.')]
-  const lines = []
   const free = info.freeBytes === null ? 'unknown' : formatBytes(info.freeBytes)
-  lines.push(h('p', {}, `Free space: ${free}. These recordings need about ${formatBytes(info.neededBytes)}.`))
+  const lines = [h('div', { className: 'space' },
+    h('span', {}, 'Free space ', h('strong', {}, free)),
+    h('span', {}, 'These recordings need about ', h('strong', {}, formatBytes(info.neededBytes))))]
   if (info.alreadySavedCount > 0) {
     const one = info.alreadySavedCount === 1
-    lines.push(h('p', {}, `${info.alreadySavedCount} of these recordings ${one ? 'is' : 'are'} already saved in this folder, so fetchtv skips ${one ? 'it' : 'them'}.`))
+    lines.push(h('p', { className: 'meta space-note' }, `${info.alreadySavedCount} of these recordings ${one ? 'is' : 'are'} already saved in this folder, so fetchtv skips ${one ? 'it' : 'them'}.`))
   }
   if (info.freeBytes !== null && info.neededBytes > info.freeBytes) {
     lines.push(h('p', { className: 'notice', role: 'alert' },
       'There is not enough free space for all of these recordings. fetchtv saves what fits. To save them all, choose a folder on a bigger drive, or go back and choose fewer recordings.'))
   }
-  if (!info.exists) lines.push(h('p', { className: 'muted small' }, 'This folder does not exist yet. fetchtv makes it when the save starts.'))
+  if (!info.exists) lines.push(h('p', { className: 'meta space-note' }, 'This folder does not exist yet. fetchtv makes it when the save starts.'))
   return lines
 }
 
@@ -414,31 +499,33 @@ const layoutExample = () => {
 
 const savingScreen = () => {
   const list = h('ul', { className: 'table' }, ...state.save.order.map(episode => saveRow(episode)))
-  const stopButton = h('button', { type: 'button', className: 'button', id: 'stop-save' }, 'Stop saving')
+  const stopButton = h('button', { type: 'button', className: 'btn stop', id: 'stop-save' }, 'Stop saving')
   stopButton.addEventListener('click', () => stopSave(stopButton))
   return {
     content: [
       h('h1', {}, 'Saving recordings'),
-      h('p', { id: 'overall-line' }, ''),
-      h('div', { className: 'progress', role: 'progressbar', 'aria-label': 'All recordings', id: 'overall-bar' }, h('span', {})),
-      h('p', { className: 'muted small', id: 'eta-line' }, 'This computer stays awake until the save finishes. Keep it on the same network as the Fetch box.'),
+      h('div', { className: 'overall' },
+        h('span', { className: 'overall-percent', id: 'overall-percent' }, '0%'),
+        h('span', { className: 'overall-text', id: 'overall-line' }, '')),
+      h('div', { className: 'progress is-overall', role: 'progressbar', 'aria-label': 'All recordings', id: 'overall-bar' }, h('span', {})),
+      h('p', { className: 'meta', id: 'eta-line' }, 'This computer stays awake until the save finishes.'),
       list
     ],
-    actions: [h('span', { className: 'spacer' }), stopButton],
+    actions: [h('span', { className: 'summary' }, 'Keep this computer on the same network as the Fetch box.'), stopButton],
     after: refreshOverall
   }
 }
 
 const saveRow = (episode) => {
   const status = h('span', { className: 'status' }, 'Waiting')
-  const bar = h('div', { className: 'progress small-bar', hidden: true }, h('span', {}))
+  const bar = h('div', { className: 'progress', hidden: true }, h('span', {}))
   state.save.elements.set(episode.id, { status, bar })
   const show = state.shows.find(item => item.episodes.includes(episode))
   return h('li', { className: 'row save-row', 'data-episode': episode.id },
     h('div', { className: 'row-main' },
       h('span', { className: 'row-text' },
         h('span', { className: 'row-title' }, `${show?.title ?? ''}: ${episode.title}`),
-        h('span', { className: 'row-detail' }, formatBytes(episode.size)),
+        h('span', { className: 'row-detail mono' }, formatBytes(episode.size)),
         bar),
       status))
 }
@@ -453,6 +540,7 @@ const updateSaveProgress = ({ id, bytes, total }) => {
   const elements = state.save.elements.get(id)
   if (elements) {
     elements.status.textContent = `${formatBytes(bytes)} of ${formatBytes(row.total)}`
+    elements.status.className = 'status is-saving'
     elements.bar.hidden = false
     elements.bar.firstChild.style.width = `${percent(bytes, row.total)}%`
   }
@@ -482,9 +570,11 @@ const refreshOverall = () => {
   const line = document.getElementById('overall-line')
   const bar = document.getElementById('overall-bar')
   if (!line || !bar) return
+  const share = percent(done, total)
+  document.getElementById('overall-percent').textContent = `${Math.floor(share)}%`
   line.textContent = `${finished} of ${plural(rows.length, 'recording')} done · ${formatBytes(done)} of ${formatBytes(total)}`
-  bar.firstChild.style.width = `${percent(done, total)}%`
-  bar.setAttribute('aria-valuenow', String(Math.round(percent(done, total))))
+  bar.firstChild.style.width = `${share}%`
+  bar.setAttribute('aria-valuenow', String(Math.round(share)))
   const eta = timeLeft({ rows, total, done })
   if (eta) document.getElementById('eta-line').textContent = `${eta} This computer stays awake until the save finishes.`
 }
@@ -511,12 +601,13 @@ const finishedScreen = () => {
   return {
     content: [
       h('h1', {}, title),
-      h('dl', { className: 'totals', id: 'save-totals' },
-        h('dt', {}, 'Saved'), h('dd', {}, String(summary.saved)),
-        h('dt', {}, 'Already saved, so skipped'), h('dd', {}, String(summary.alreadySaved)),
-        h('dt', {}, 'Not saved'), h('dd', {}, String(summary.notSaved)),
-        ...(summary.stopped > 0 ? [h('dt', {}, 'Stopped'), h('dd', {}, String(summary.stopped))] : [])),
-      h('p', {}, `The recordings are in ${state.folder}`),
+      h('p', { className: 'lead' }, 'The recordings are in this folder:'),
+      h('p', { className: 'panel folder-path' }, state.folder),
+      h('dl', { className: 'stats', id: 'save-totals' },
+        stat({ label: 'Saved', value: summary.saved, tone: 'is-good' }),
+        stat({ label: 'Already saved, so skipped', value: summary.alreadySaved }),
+        stat({ label: 'Not saved', value: summary.notSaved, tone: summary.notSaved > 0 ? 'is-bad' : '' }),
+        summary.stopped > 0 ? stat({ label: 'Stopped', value: summary.stopped }) : null),
       remaining > 0
         ? h('p', {}, 'To finish the rest, press Save again. fetchtv skips the recordings that are already saved and carries on with the others.')
         : h('p', {}, 'The files play in VLC, a free video player, or in a media library app such as Plex, Jellyfin or Kodi.'),
@@ -526,24 +617,26 @@ const finishedScreen = () => {
         : null
     ],
     actions: [
-      h('button', { type: 'button', className: 'button', id: 'open-folder', onclick: () => api.openSavedFolder() }, 'Open folder'),
+      h('button', { type: 'button', className: `btn${remaining > 0 ? '' : ' primary'}`, id: 'open-folder', onclick: () => api.openSavedFolder() }, 'Open folder'),
       h('span', { className: 'spacer' }),
-      h('button', { type: 'button', className: 'button', onclick: () => showScreen(2, recordingsScreen()) }, 'Choose other recordings'),
-      h('button', { type: 'button', className: `button${remaining > 0 ? ' primary' : ''}`, id: 'save-again', onclick: beginSave }, 'Save again')
+      h('button', { type: 'button', className: 'btn quiet', onclick: () => showScreen(2, recordingsScreen()) }, 'Choose other recordings'),
+      h('button', { type: 'button', className: `btn${remaining > 0 ? ' primary' : ''}`, id: 'save-again', onclick: beginSave }, 'Save again')
     ]
   }
 }
 
+const stat = ({ label, value, tone = '' }) => h('div', { className: `stat ${tone}` }, h('dt', {}, label), h('dd', {}, String(value)))
+
 const saveErrorScreen = () => ({
   content: [
     h('h1', {}, 'The save could not start'),
-    h('p', {}, state.save.error === 'no-space'
+    h('p', { className: 'lead' }, state.save.error === 'no-space'
       ? 'The folder has no free space. Choose a folder on a bigger drive.'
       : 'fetchtv could not save into this folder. Choose another folder, then try again.')
   ],
   actions: [
     h('span', { className: 'spacer' }),
-    h('button', { type: 'button', className: 'button primary', onclick: goToFolderStep }, 'Choose a folder')
+    h('button', { type: 'button', className: 'btn primary', onclick: goToFolderStep }, 'Choose a folder')
   ]
 })
 
@@ -574,19 +667,24 @@ const isFinal = (status) => status !== 'waiting' && status !== 'saving'
 
 const showScreen = (step, screen) => {
   state.step = step
+  document.body.classList.toggle('is-welcome', step === 0)
   document.querySelectorAll('#steps li').forEach(item => {
-    if (Number(item.dataset.step) === step) item.setAttribute('aria-current', 'step')
+    const itemStep = Number(item.dataset.step)
+    item.classList.toggle('is-done', itemStep < step)
+    if (itemStep === step) item.setAttribute('aria-current', 'step')
     else item.removeAttribute('aria-current')
   })
   const view = document.getElementById('view')
   view.replaceChildren(...screen.content.filter(Boolean))
   view.scrollTop = 0
-  document.getElementById('actions').replaceChildren(...(screen.actions ?? []).filter(Boolean))
+  const actions = (screen.actions ?? []).filter(Boolean)
+  document.getElementById('actions').replaceChildren(...(actions.length ? [h('div', { className: 'actions-inner' }, ...actions)] : []))
   if (screen.after) screen.after()
   view.focus({ preventScroll: true })
 }
 
-const busyBar = () => h('div', { className: 'progress busy', role: 'progressbar', 'aria-label': 'Working' }, h('span', {}))
+const markElement = ({ large = false } = {}) => h('span', { className: `mark${large ? ' is-large' : ''}`, role: 'img', 'aria-label': 'fetchtv' },
+  h('span', { className: 'chip blue' }), h('span', { className: 'chip orange' }), h('span', { className: 'chip yellow' }), h('span', { className: 'tray' }))
 
 const savableEpisodes = (shows) => shows.flatMap(show => show.episodes).filter(episode => !episode.stillRecording)
 
