@@ -1,0 +1,28 @@
+{
+  "name": "fetchtv-desktop",
+  "productName": "fetchtv",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Copy the recordings on a Fetch box to a folder on this computer.",
+  "author": "James Furey (https://about.me/jamesfurey)",
+  "license": "GPL-3.0-or-later",
+  "homepage": "https://github.com/furey/fetchtv",
+  "type": "module",
+  "main": "dist/main.mjs",
+  "scripts": {
+    "bundle": "node scripts/bundle.mjs",
+    "start": "npm run bundle && electron .",
+    "fake-box": "node test/fake-box-cli.mjs",
+    "test": "npm run bundle && node --test --test-concurrency=1 --test-timeout=180000 \"test/*.test.mjs\"",
+    "dist": "npm run bundle && electron-builder --config electron-builder.config.cjs",
+    "dist:mac": "npm run dist -- --mac",
+    "dist:win": "npm run dist -- --win",
+    "dist:linux": "npm run dist -- --linux"
+  },
+  "devDependencies": {
+    "electron": "44.9.0",
+    "electron-builder": "26.17.0",
+    "esbuild": "0.28.2",
+    "playwright-core": "1.64.1"
+  }
+}

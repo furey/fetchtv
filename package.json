@@ -9,6 +9,9 @@
   "bin": {
     "fetchtv": "fetchtv.js"
   },
+  "files": [
+    "fetchtv.js"
+  ],
   "scripts": {
     "start": "node fetchtv.js",
     "test": "node --test 'test/*.test.js'"

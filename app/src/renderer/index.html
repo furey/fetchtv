@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>fetchtv</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <p class="brand">fetchtv</p>
+    <ol class="steps" id="steps" aria-label="Steps">
+      <li data-step="1"><span class="step-number">1</span> Find your Fetch box</li>
+      <li data-step="2"><span class="step-number">2</span> Choose recordings</li>
+      <li data-step="3"><span class="step-number">3</span> Choose a folder</li>
+      <li data-step="4"><span class="step-number">4</span> Save</li>
+    </ol>
+  </header>
+  <main id="view" tabindex="-1"></main>
+  <div class="actions" id="actions"></div>
+  <footer class="bottom">
+    <span id="about-line">fetchtv</span>
+    <button type="button" class="link" id="project-link">Project page and help</button>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>
