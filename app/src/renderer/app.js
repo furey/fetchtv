@@ -21,10 +21,10 @@ const start = async () => {
   state.info = await api.appInfo()
   state.folder = state.info.settings.lastFolder || state.info.defaultFolder
   state.forPlex = Boolean(state.info.settings.forPlex)
-  document.getElementById('about-line').textContent =
-    `Fetch My Recordings ${state.info.version} · Free and open source · Not affiliated with Fetch TV`
+  document.getElementById('about-line').textContent = `Fetch My Recordings ${state.info.version} · Not affiliated with Fetch TV`
   document.getElementById('project-link').addEventListener('click', () => api.openProjectPage())
   setUpSoundToggle(state.info.settings.sound !== false)
+  setUpDialog()
   api.onListProgress(showListProgress)
   api.onSaveProgress(updateSaveProgress)
   api.onSaveResult(updateSaveResult)
@@ -74,7 +74,7 @@ const useBox = async (box) => {
     return showScreen(2, listFailedScreen())
   }
   state.shows = result.shows
-  state.selected = new Set(savableEpisodes(state.shows).map(episode => episode.id))
+  state.selected = new Set(savableEpisodes(state.shows).filter(isWanted).map(episode => episode.id))
   showScreen(2, state.shows.length === 0 ? emptyListScreen() : recordingsScreen())
 }
 
@@ -93,8 +93,8 @@ const connectByAddress = async ({ address, form }) => {
   }
   if (result.error !== 'invalid-address') sounds.play('failed')
   message.textContent = result.error === 'invalid-address'
-    ? 'Type the address as four numbers with dots between them, such as 192.168.1.50.'
-    : `No Fetch box answered at ${address.trim()}. Check the address, and check that the box is turned on.`
+    ? 'That is not an IP address.'
+    : `No box answered at ${address.trim()}.`
 }
 
 const goToFolderStep = async () => {
@@ -152,15 +152,8 @@ const welcomeScreen = () => ({
     h('section', { className: 'welcome' },
       markElement({ large: true }),
       h('h1', {}, 'Fetch My Recordings'),
-      h('p', { className: 'lead' }, 'Copies the recordings on your Fetch box to a folder on this computer, so you can keep them and watch them anywhere.'),
-      h('ol', { className: 'how' },
-        h('li', {}, 'Find the Fetch box on your home network'),
-        h('li', {}, 'Choose the recordings you want'),
-        h('li', {}, 'Choose a folder, then save')),
-      h('p', { className: 'reassure' },
-        'Free and open source, built on the fetchtv command-line tool. It talks only to your Fetch box, on your home network. It needs no Fetch account, and it deletes nothing from the box.'),
-      h('p', { className: 'reassure', id: 'independence' },
-        'Fetch My Recordings is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner.'))
+      h('p', { className: 'lead' }, 'Copy the recordings on your Fetch box to this computer.'),
+      h('button', { type: 'button', className: 'link', id: 'about-app', onclick: openAbout }, 'About this app'))
   ],
   actions: [
     h('span', { className: 'spacer' }),
@@ -169,10 +162,23 @@ const welcomeScreen = () => ({
   ]
 })
 
+const openAbout = () => openInfo({
+  title: 'About this app',
+  body: [
+    h('ol', { className: 'how' },
+      h('li', {}, 'Find the Fetch box on your home network'),
+      h('li', {}, 'Choose the recordings you want'),
+      h('li', {}, 'Choose a folder, then save')),
+    h('p', {}, 'Free and open source, built on the fetchtv command-line tool. It talks only to your Fetch box, on your home network. It needs no Fetch account, and it deletes nothing from the box.'),
+    h('p', { id: 'independence' }, 'Fetch My Recordings is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner.'),
+    h('p', { className: 'meta' }, `Version ${state.info.version}. Licence GPL-3.0-or-later.`),
+    h('p', {}, h('button', { type: 'button', className: 'btn', onclick: () => api.openProjectPage() }, 'Project page and help'))
+  ]
+})
+
 const searchingScreen = () => ({
   content: [
     h('h1', {}, 'Looking for your Fetch box'),
-    h('p', { className: 'lead' }, 'Searching your home network. This takes up to 10 seconds.'),
     h('div', { className: 'progress is-busy searching', role: 'progressbar', 'aria-label': 'Searching' }, h('span', {}))
   ]
 })
@@ -180,23 +186,26 @@ const searchingScreen = () => ({
 const notFoundScreen = () => ({
   content: [
     illustration('no-box'),
-    h('h1', {}, 'No Fetch box found'),
-    h('p', { className: 'lead' }, 'Check these, then search again:'),
-    h('ul', { className: 'checks' },
-      h('li', {}, 'The Fetch box is turned on.'),
-      h('li', {}, 'This computer is on the same Wi-Fi or home network as the Fetch box.')),
+    headingWithInfo({ text: 'No Fetch box found', info: notFoundInfo }),
     h('p', {}, h('button', { type: 'button', className: 'btn', onclick: () => searchForBoxes({ autoPick: true }) }, 'Search again')),
-    h('h2', {}, 'Or type its IP address'),
     addressForm()
+  ]
+})
+
+const notFoundInfo = () => openInfo({
+  title: 'No Fetch box found',
+  body: [
+    h('p', {}, 'Check that:'),
+    h('ul', { className: 'checks' },
+      h('li', {}, 'the Fetch box is turned on'),
+      h('li', {}, 'this computer is on the same Wi-Fi or home network as the Fetch box')),
+    h('p', {}, 'Then search again, or type the IP address of the box.')
   ]
 })
 
 const chooseBoxScreen = () => ({
   content: [
     h('h1', {}, state.boxes.length > 1 ? 'Choose your Fetch box' : 'Fetch box found'),
-    h('p', { className: 'lead' }, state.boxes.length > 1
-      ? 'There is more than one Fetch box on your network. Choose the one with your recordings.'
-      : 'Choose the box to copy recordings from.'),
     h('ul', { className: 'table' }, ...state.boxes.map(box => h('li', { className: 'row' },
       h('button', { type: 'button', className: 'choice', onclick: () => useBox(box) },
         h('span', { className: 'box-dot' }),
@@ -204,7 +213,6 @@ const chooseBoxScreen = () => ({
           h('span', { className: 'row-title' }, box.name),
           h('span', { className: 'row-detail mono' }, box.address)))))),
     h('p', {}, h('button', { type: 'button', className: 'link', onclick: () => searchForBoxes({ autoPick: false }) }, 'Search again')),
-    h('h2', {}, 'Or type its IP address'),
     addressForm()
   ]
 })
@@ -220,13 +228,12 @@ const addressForm = () => {
   })
   const form = h('form', { className: 'panel address-form', novalidate: true },
     h('div', { className: 'field' },
-      h('label', { htmlFor: 'box-address' }, 'IP address of the Fetch box'),
+      h('span', { className: 'label-row' },
+        h('label', { htmlFor: 'box-address' }, 'Or type its IP address'),
+        infoButton({ label: 'Where to find the IP address', onclick: ipInfo })),
       input,
       h('button', { type: 'submit', className: 'btn' }, 'Connect')),
-    h('p', { className: 'form-message', role: 'alert' }),
-    h('p', { className: 'hint' },
-      'Four numbers with dots between them, such as 192.168.1.50. ' +
-      'Find it in your router’s list of connected devices, or in the network details of the Fetch box’s settings menu.'))
+    h('p', { className: 'form-message', role: 'alert' }))
   form.addEventListener('submit', (event) => {
     event.preventDefault()
     connectByAddress({ address: input.value, form })
@@ -234,28 +241,42 @@ const addressForm = () => {
   return form
 }
 
+const ipInfo = () => openInfo({
+  title: 'The IP address of your Fetch box',
+  body: [
+    h('p', {}, 'It is four numbers with dots between them, such as 192.168.1.50.'),
+    h('p', {}, 'Find it in your router’s list of connected devices, or in the network details of the Fetch box’s settings menu.')
+  ]
+})
+
 const loadingListScreen = () => ({
   content: [
     boxCard(),
     h('h1', {}, 'Reading your recordings'),
-    h('p', { className: 'lead', id: 'list-progress' }, 'Asking the Fetch box for its list of recordings…'),
+    h('p', { className: 'meta', id: 'list-progress' }, ''),
     h('div', { className: 'progress is-busy searching', role: 'progressbar', 'aria-label': 'Reading' }, h('span', {}))
   ]
 })
 
 const showListProgress = ({ done, total }) => {
   const line = document.getElementById('list-progress')
-  if (line && total > 0) line.textContent = `Reading the list of recordings: ${done} of ${total} shows`
+  if (line && total > 0) line.textContent = `${done} of ${total} shows`
 }
 
 const emptyListScreen = () => ({
   content: [
     boxCard(),
     illustration('no-recordings'),
-    h('h1', {}, 'No recordings on this Fetch box'),
-    h('p', { className: 'lead' }, 'The box answered, but it lists no recordings to copy.'),
-    h('p', {}, 'A Fetch box whose account is cancelled shows its setup screen on the TV and lists no recordings.'),
+    headingWithInfo({ text: 'No recordings on this box', info: emptyInfo }),
     h('p', {}, h('button', { type: 'button', className: 'btn', onclick: () => useBox(state.box) }, 'Check again'))
+  ]
+})
+
+const emptyInfo = () => openInfo({
+  title: 'No recordings on this box',
+  body: [
+    h('p', {}, 'The box answered, but it lists no recordings to copy.'),
+    h('p', { id: 'cancelled-account' }, 'A Fetch box whose account is cancelled shows its setup screen on the TV and lists no recordings.')
   ]
 })
 
@@ -263,7 +284,6 @@ const listFailedScreen = () => ({
   content: [
     boxCard(),
     h('h1', {}, 'Could not read the recordings'),
-    h('p', { className: 'lead' }, 'The Fetch box did not send its list of recordings. Check that the box is turned on, then try again.'),
     h('p', {}, h('button', { type: 'button', className: 'btn', onclick: () => useBox(state.box) }, 'Try again'))
   ]
 })
@@ -273,7 +293,7 @@ const boxCard = () => h('div', { className: 'box-card', id: 'box-card' },
   h('span', { className: 'box-text' },
     h('span', { className: 'box-name' }, state.box.name),
     h('span', { className: 'box-address mono' }, state.box.address)),
-  h('button', { type: 'button', className: 'link', onclick: () => searchForBoxes({ autoPick: false }) }, 'Use a different box'))
+  h('button', { type: 'button', className: 'link', onclick: () => searchForBoxes({ autoPick: false }) }, 'Change'))
 
 const recordingsScreen = () => {
   const summary = h('span', { className: 'summary', id: 'selection-summary' })
@@ -290,8 +310,8 @@ const recordingsScreen = () => {
   return {
     content: [
       boxCard(),
-      h('h1', {}, 'Choose the recordings to save'),
-      h('p', { className: 'meta' }, 'Press a show to choose single episodes.'),
+      h('h1', {}, 'Choose recordings'),
+      h('p', { className: 'meta', id: 'saved-summary' }, savedSummaryLine()),
       h('div', { className: 'toolbar' }, h('div', { className: 'segmented', role: 'group', 'aria-label': 'Selection' }, allButton, noneButton)),
       h('ul', { className: 'table', id: 'show-list' }, ...rows.map(row => row.element))
     ],
@@ -303,36 +323,37 @@ const recordingsScreen = () => {
   }
 }
 
+const savedSummaryLine = () => {
+  const episodes = savableEpisodes(state.shows)
+  const count = (savedState) => episodes.filter(episode => savedStateOf(episode) === savedState).length
+  return [
+    `${count('new')} new`,
+    count('saved') > 0 && `${count('saved')} already saved`,
+    count('missing') > 0 && `${count('missing')} moved or deleted`
+  ].filter(Boolean).join(' · ')
+}
+
 const showRow = (show) => {
   const savable = show.episodes.filter(episode => !episode.stillRecording)
-  const hasDrawer = show.episodes.length > 1
   const checkbox = h('input', { type: 'checkbox', disabled: savable.length === 0, 'aria-label': show.title })
   const row = { onChange: () => {} }
   const episodeRows = show.episodes.map(episode => episodeRow({ episode, onChange: () => row.onChange() }))
-  const drawer = hasDrawer ? h('ul', { className: 'drawer', hidden: !state.open.has(show.id) }, ...episodeRows.map(item => item.element)) : null
-  const side = h('span', { className: 'row-side' })
+  const drawer = h('ul', { className: 'drawer', hidden: !state.open.has(show.id) }, ...episodeRows.map(item => item.element))
+  const side = h('span', { className: 'row-side-value mono' })
   const reveal = h('span', { className: 'row-reveal' })
-  const main = h('div', { className: `row-main${savable.length > 0 || hasDrawer ? ' is-clickable' : ''}` },
+  const detail = h('span', { className: 'row-detail' })
+  const main = h('div', { className: 'row-main is-clickable', role: 'button', tabindex: '0', 'aria-expanded': String(state.open.has(show.id)) },
     h('label', { className: 'check', onclick: (event) => event.stopPropagation() }, checkbox),
-    h('span', { className: 'row-text' },
-      h('span', { className: 'row-title' }, show.title),
-      h('span', { className: 'row-detail' }, showDetail(show))),
-    h('span', { className: 'row-side' }, hasDrawer ? reveal : null, hasDrawer ? h('br', {}) : null, side))
+    h('span', { className: 'row-text' }, h('span', { className: 'row-title' }, show.title), detail),
+    h('span', { className: 'row-side' }, reveal, h('br', {}), side))
 
-  if (hasDrawer) {
-    main.setAttribute('role', 'button')
-    main.setAttribute('tabindex', '0')
-    main.setAttribute('aria-expanded', String(state.open.has(show.id)))
-    const toggle = () => toggleDrawer({ show, drawer, main, reveal })
-    main.addEventListener('click', toggle)
-    main.addEventListener('keydown', (event) => {
-      if (event.target !== main || (event.key !== 'Enter' && event.key !== ' ')) return
-      event.preventDefault()
-      toggle()
-    })
-  } else {
-    main.addEventListener('click', () => { if (!checkbox.disabled) checkbox.click() })
-  }
+  const toggle = () => toggleDrawer({ show, drawer, main, reveal })
+  main.addEventListener('click', toggle)
+  main.addEventListener('keydown', (event) => {
+    if (event.target !== main || (event.key !== 'Enter' && event.key !== ' ')) return
+    event.preventDefault()
+    toggle()
+  })
 
   checkbox.addEventListener('change', () => {
     savable.forEach(episode => checkbox.checked ? state.selected.add(episode.id) : state.selected.delete(episode.id))
@@ -343,9 +364,9 @@ const showRow = (show) => {
     const chosen = savable.filter(episode => state.selected.has(episode.id)).length
     checkbox.checked = chosen > 0 && chosen === savable.length
     checkbox.indeterminate = chosen > 0 && chosen < savable.length
-    side.textContent = hasDrawer ? `${chosen} of ${show.episodes.length}` : formatBytes(sumSizes(show.episodes))
-    side.className = 'row-side-value mono'
-    reveal.textContent = state.open.has(show.id) ? 'Hide episodes' : 'Show episodes'
+    side.textContent = `${chosen} of ${show.episodes.length}`
+    detail.textContent = showDetail(show)
+    reveal.textContent = state.open.has(show.id) ? 'Hide' : 'Show'
     episodeRows.forEach(item => item.refresh())
   }
   row.refresh()
@@ -360,28 +381,43 @@ const episodeRow = ({ episode, onChange }) => {
     checkbox.checked ? state.selected.add(episode.id) : state.selected.delete(episode.id)
     onChange()
   })
-  const detail = episode.stillRecording
-    ? 'Still recording. Save it after the recording ends.'
-    : formatDuration(episode.duration)
-  const main = h('div', { className: `row-main${episode.stillRecording ? '' : ' is-clickable'}` },
+  const savedState = savedStateOf(episode)
+  const side = episode.stillRecording ? '' : savedState === 'saved' ? 'Saved' : formatBytes(episode.size)
+  const main = h('div', { className: `row-main${episode.stillRecording ? '' : ' is-clickable'}`, 'data-saved': savedState },
     h('label', { className: 'check', onclick: (event) => event.stopPropagation() }, checkbox),
     h('span', { className: 'row-text' },
       h('span', { className: 'row-title' }, episode.title),
-      h('span', { className: 'row-detail' }, detail)),
-    h('span', { className: 'row-side mono' }, episode.stillRecording ? '' : formatBytes(episode.size)))
+      h('span', { className: 'row-detail' }, episodeDetail(episode))),
+    h('span', { className: `row-side ${savedState === 'saved' ? 'is-saved' : 'mono'}` }, side))
   main.addEventListener('click', () => { if (!checkbox.disabled) checkbox.click() })
   return {
-    element: h('li', { className: 'row' }, main),
+    element: h('li', { className: 'row episode-row', 'data-episode': episode.id }, main),
     refresh: () => { checkbox.checked = state.selected.has(episode.id) }
   }
 }
+
+const episodeDetail = (episode) => {
+  if (episode.stillRecording) return 'Still recording'
+  const saved = episode.saved ?? { state: 'new' }
+  if (saved.state === 'missing') return `Saved ${savedDate(saved.savedAt)}to ${saved.path}. The file is no longer there.`
+  if (saved.state === 'saved') return `${formatDuration(episode.duration)} · in ${parentFolder(saved.path)}`
+  return formatDuration(episode.duration)
+}
+
+const savedDate = (iso) => (iso ? `on ${new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })} ` : '')
+
+const parentFolder = (filePath) => filePath.split(/[\\/]/).slice(-2, -1)[0] ?? filePath
+
+const savedStateOf = (episode) => episode.saved?.state ?? 'new'
+
+const isWanted = (episode) => savedStateOf(episode) !== 'saved'
 
 const toggleDrawer = ({ show, drawer, main, reveal }) => {
   const isOpen = state.open.has(show.id)
   isOpen ? state.open.delete(show.id) : state.open.add(show.id)
   drawer.hidden = isOpen
   main.setAttribute('aria-expanded', String(!isOpen))
-  reveal.textContent = isOpen ? 'Show episodes' : 'Hide episodes'
+  reveal.textContent = isOpen ? 'Show' : 'Hide'
 }
 
 const refreshSelectionSummary = ({ summary, next, allButton, noneButton }) => {
@@ -398,11 +434,10 @@ const refreshSelectionSummary = ({ summary, next, allButton, noneButton }) => {
 const selectAll = () => savableEpisodes(state.shows).forEach(episode => state.selected.add(episode.id))
 
 const showDetail = (show) => {
-  const recording = show.episodes.filter(episode => episode.stillRecording).length
-  const parts = [plural(show.episodes.length, 'recording')]
-  if (show.episodes.length > 1) parts.push(formatBytes(sumSizes(show.episodes)))
-  if (recording > 0) parts.push(`${recording} still recording`)
-  return parts.join(' · ')
+  const savable = show.episodes.filter(episode => !episode.stillRecording)
+  const saved = savable.filter(episode => savedStateOf(episode) === 'saved').length
+  if (savable.length > 0 && saved === savable.length) return 'All saved'
+  return `${plural(show.episodes.length, 'recording')} · ${formatBytes(sumSizes(show.episodes))}`
 }
 
 const folderScreen = () => {
@@ -412,45 +447,44 @@ const folderScreen = () => {
     className: 'toggle',
     id: 'plex-switch',
     'aria-checked': String(state.forPlex),
-    'aria-labelledby': 'plex-label',
-    'aria-describedby': 'plex-help'
+    'aria-labelledby': 'plex-label'
   }, h('span', { className: 'toggle-track' }, h('span', { className: 'toggle-knob' })))
-  const example = h('span', { className: 'example', id: 'layout-example' })
-  const refreshExample = () => {
-    plexSwitch.setAttribute('aria-checked', String(state.forPlex))
-    example.textContent = layoutExample()
-  }
   plexSwitch.addEventListener('click', () => {
     state.forPlex = !state.forPlex
-    refreshExample()
+    plexSwitch.setAttribute('aria-checked', String(state.forPlex))
   })
-  refreshExample()
-  const chosen = savableEpisodes(state.shows).filter(episode => state.selected.has(episode.id))
   return {
     content: [
-      h('h1', {}, 'Choose where to save'),
-      h('p', { className: 'lead' }, `${plural(chosen.length, 'recording')}, with a folder for each show.`),
+      h('h1', {}, 'Choose a folder'),
       h('div', { className: 'panel' },
         h('div', { className: 'folder' },
           h('span', { className: 'folder-path', id: 'folder-path' }, state.folder),
-          h('button', { type: 'button', className: 'btn', id: 'change-folder', onclick: changeFolder }, 'Change folder')),
+          h('button', { type: 'button', className: 'btn', id: 'change-folder', onclick: changeFolder }, 'Change')),
         h('div', { id: 'folder-info', 'aria-live': 'polite' })),
       h('div', { className: 'setting' },
         plexSwitch,
-        h('div', {},
-          h('span', { className: 'setting-title', id: 'plex-label', onclick: () => plexSwitch.click() }, 'Name files for Plex, Jellyfin or Kodi'),
-          h('p', { id: 'plex-help' },
-            'Media library apps need a folder for each season and the episode number in each file name. ' +
-            'Turn this on if you watch recordings in one of them. A film keeps its own name.'),
-          example))
+        h('span', { className: 'setting-title', id: 'plex-label', onclick: () => plexSwitch.click() }, 'Names for Plex, Jellyfin or Kodi'),
+        infoButton({ label: 'About names for Plex, Jellyfin or Kodi', onclick: plexInfo }))
     ],
     actions: [
       h('span', { className: 'spacer' }),
       h('button', { type: 'button', className: 'btn quiet', onclick: () => showScreen(2, recordingsScreen()) }, 'Back'),
-      h('button', { type: 'button', className: 'btn primary', id: 'start-save', onclick: beginSave }, 'Start saving')
+      h('button', { type: 'button', className: 'btn primary', id: 'start-save', onclick: beginSave }, 'Save')
     ]
   }
 }
+
+const plexInfo = () => openInfo({
+  title: 'Names for Plex, Jellyfin or Kodi',
+  body: [
+    h('p', {}, 'Media library apps need a folder for each season and the season and episode number in each file name. Turn this on if you watch recordings in one of them.'),
+    h('p', {}, 'On'),
+    h('p', { className: 'example', id: 'example-on' }, layoutExample({ forPlex: true })),
+    h('p', {}, 'Off'),
+    h('p', { className: 'example', id: 'example-off' }, layoutExample({ forPlex: false })),
+    h('p', { className: 'meta' }, 'A recording without a season and episode number, such as a film, keeps its own name.')
+  ]
+})
 
 const renderFolderInfo = () => {
   const box = document.getElementById('folder-info')
@@ -458,7 +492,7 @@ const renderFolderInfo = () => {
   const info = state.folderInfo
   const startButton = document.getElementById('start-save')
   if (!info) {
-    box.replaceChildren(h('p', { className: 'meta space' }, 'Checking the free space in this folder…'))
+    box.replaceChildren(h('p', { className: 'meta space' }, 'Checking free space…'))
     if (startButton) startButton.disabled = true
     return
   }
@@ -467,29 +501,27 @@ const renderFolderInfo = () => {
 }
 
 const folderInfoLines = (info) => {
-  if (!info.canWrite) return [h('p', { className: 'notice', role: 'alert' }, 'Saving to this folder is not allowed. Choose another folder.')]
+  if (!info.canWrite) return [h('p', { className: 'notice', role: 'alert' }, 'Saving to this folder is not allowed.')]
   const free = info.freeBytes === null ? 'unknown' : formatBytes(info.freeBytes)
-  const lines = [h('div', { className: 'space' },
-    h('span', {}, 'Free space ', h('strong', {}, free)),
-    h('span', {}, 'These recordings need about ', h('strong', {}, formatBytes(info.neededBytes))))]
-  if (info.alreadySavedCount > 0) {
-    const one = info.alreadySavedCount === 1
-    lines.push(h('p', { className: 'meta space-note' }, `${info.alreadySavedCount} of these recordings ${one ? 'is' : 'are'} already saved in this folder, so the save skips ${one ? 'it' : 'them'}.`))
-  }
+  const parts = [
+    h('span', {}, 'Needs ', h('strong', {}, formatBytes(info.neededBytes))),
+    h('span', {}, 'Free ', h('strong', {}, free)),
+    info.alreadySavedCount > 0 ? h('span', { id: 'already-here' }, h('strong', {}, String(info.alreadySavedCount)), ' already here') : null
+  ]
+  const lines = [h('div', { className: 'space' }, ...parts)]
   if (info.freeBytes !== null && info.neededBytes > info.freeBytes) {
-    lines.push(h('p', { className: 'notice', role: 'alert' },
-      'There is not enough free space for all of these recordings. The save copies what fits. To save them all, choose a folder on a bigger drive, or go back and choose fewer recordings.'))
+    lines.push(h('p', { className: 'notice', role: 'alert' }, 'Not enough space for all of these.'))
   }
-  if (!info.exists) lines.push(h('p', { className: 'meta space-note' }, 'This folder does not exist yet. The save makes it when it starts.'))
   return lines
 }
 
-const layoutExample = () => {
-  const episode = savableEpisodes(state.shows).find(item => state.selected.has(item.id))
+const layoutExample = ({ forPlex }) => {
+  const episodes = savableEpisodes(state.shows).filter(item => state.selected.has(item.id))
+  const episode = episodes.find(item => /S(?:eason)?\s*\d{1,3}\s*E(?:pisode)?\s*\d{1,3}/i.test(item.title)) ?? episodes[0]
   const show = state.shows.find(item => item.episodes.includes(episode))
   if (!episode || !show) return ''
   const numbers = episode.title.match(/S(?:eason)?\s*(\d{1,3})\s*E(?:pisode)?\s*(\d{1,3})/i)
-  if (state.forPlex && numbers) {
+  if (forPlex && numbers) {
     const season = numbers[1].padStart(2, '0')
     const number = numbers[2].padStart(2, '0')
     return `${show.title}/Season ${season}/${show.title} - S${season}E${number}.ts`
@@ -499,22 +531,29 @@ const layoutExample = () => {
 
 const savingScreen = () => {
   const list = h('ul', { className: 'table' }, ...state.save.order.map(episode => saveRow(episode)))
-  const stopButton = h('button', { type: 'button', className: 'btn stop', id: 'stop-save' }, 'Stop saving')
+  const stopButton = h('button', { type: 'button', className: 'btn stop', id: 'stop-save' }, 'Stop')
   stopButton.addEventListener('click', () => stopSave(stopButton))
   return {
     content: [
-      h('h1', {}, 'Saving recordings'),
+      headingWithInfo({ text: 'Saving', info: savingInfo }),
       h('div', { className: 'overall' },
         h('span', { className: 'overall-percent', id: 'overall-percent' }, '0%'),
         h('span', { className: 'overall-text', id: 'overall-line' }, '')),
       h('div', { className: 'progress is-overall', role: 'progressbar', 'aria-label': 'All recordings', id: 'overall-bar' }, h('span', {})),
-      h('p', { className: 'meta', id: 'eta-line' }, 'This computer stays awake until the save finishes.'),
       list
     ],
-    actions: [h('span', { className: 'summary' }, 'Keep this computer on the same network as the Fetch box.'), stopButton],
+    actions: [h('span', { className: 'spacer' }), stopButton],
     after: refreshOverall
   }
 }
+
+const savingInfo = () => openInfo({
+  title: 'While it saves',
+  body: [
+    h('p', {}, 'This computer stays awake until the save finishes. Keep it on the same network as the Fetch box.'),
+    h('p', {}, 'If you stop, a recording that is part way keeps what it has. Save the same recordings to the same folder again to carry on from there.')
+  ]
+})
 
 const saveRow = (episode) => {
   const status = h('span', { className: 'status' }, 'Waiting')
@@ -525,7 +564,6 @@ const saveRow = (episode) => {
     h('div', { className: 'row-main' },
       h('span', { className: 'row-text' },
         h('span', { className: 'row-title' }, `${show?.title ?? ''}: ${episode.title}`),
-        h('span', { className: 'row-detail mono' }, formatBytes(episode.size)),
         bar),
       status))
 }
@@ -572,11 +610,10 @@ const refreshOverall = () => {
   if (!line || !bar) return
   const share = percent(done, total)
   document.getElementById('overall-percent').textContent = `${Math.floor(share)}%`
-  line.textContent = `${finished} of ${plural(rows.length, 'recording')} done · ${formatBytes(done)} of ${formatBytes(total)}`
+  const eta = timeLeft({ rows, total, done })
+  line.textContent = [`${finished} of ${rows.length} done`, `${formatBytes(done)} of ${formatBytes(total)}`, eta].filter(Boolean).join(' · ')
   bar.firstChild.style.width = `${share}%`
   bar.setAttribute('aria-valuenow', String(Math.round(share)))
-  const eta = timeLeft({ rows, total, done })
-  if (eta) document.getElementById('eta-line').textContent = `${eta} This computer stays awake until the save finishes.`
 }
 
 const timeLeft = ({ rows, total, done }) => {
@@ -584,34 +621,26 @@ const timeLeft = ({ rows, total, done }) => {
   const copied = rows.reduce((sum, row) => sum + (row.firstBytes === null ? 0 : Math.max(0, Math.min(row.bytes, row.total) - row.firstBytes)), 0)
   if (elapsed < 10 || copied <= 0) return ''
   const seconds = (total - done) / (copied / elapsed)
-  if (seconds < 60) return 'Less than a minute left.'
+  if (seconds < 60) return 'under a minute left'
   const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `About ${plural(minutes, 'minute')} left.`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return `About ${plural(hours, 'hour')}${rest ? ` ${plural(rest, 'minute')}` : ''} left.`
+  if (minutes < 60) return `about ${minutes} min left`
+  return `about ${Math.floor(minutes / 60)} hr ${minutes % 60} min left`
 }
 
 const finishedScreen = () => {
   const summary = state.save.summary
   if (!summary) return saveErrorScreen()
   const remaining = summary.notSaved + summary.stopped
-  const title = summary.stopped > 0 ? 'Save stopped' : remaining > 0 ? 'Finished, but some recordings were not saved' : 'All done'
+  const title = summary.stopped > 0 ? 'Stopped' : remaining > 0 ? 'Some not saved' : 'All done'
   const problemRows = state.save.order.filter(episode => ['failed', 'locked', 'still_recording', 'cancelled'].includes(state.save.rows.get(episode.id)?.status))
   return {
     content: [
-      h('h1', {}, title),
-      h('p', { className: 'lead' }, 'The recordings are in this folder:'),
-      h('p', { className: 'panel folder-path' }, state.folder),
+      headingWithInfo({ text: title, info: finishedInfo }),
       h('dl', { className: 'stats', id: 'save-totals' },
         stat({ label: 'Saved', value: summary.saved, tone: 'is-good' }),
-        stat({ label: 'Already saved, so skipped', value: summary.alreadySaved }),
+        stat({ label: 'Already saved', value: summary.alreadySaved }),
         stat({ label: 'Not saved', value: summary.notSaved, tone: summary.notSaved > 0 ? 'is-bad' : '' }),
         summary.stopped > 0 ? stat({ label: 'Stopped', value: summary.stopped }) : null),
-      remaining > 0
-        ? h('p', {}, 'To finish the rest, press Save again. It skips the recordings that are already saved and carries on with the others.')
-        : h('p', {}, 'The files play in VLC, a free video player, or in a media library app such as Plex, Jellyfin or Kodi.'),
-      problemRows.length > 0 ? h('h2', {}, 'Not saved') : null,
       problemRows.length > 0
         ? h('ul', { className: 'table', id: 'problem-list' }, ...problemRows.map(episode => problemRow(episode)))
         : null
@@ -619,20 +648,28 @@ const finishedScreen = () => {
     actions: [
       h('button', { type: 'button', className: `btn${remaining > 0 ? '' : ' primary'}`, id: 'open-folder', onclick: () => api.openSavedFolder() }, 'Open folder'),
       h('span', { className: 'spacer' }),
-      h('button', { type: 'button', className: 'btn quiet', onclick: () => showScreen(2, recordingsScreen()) }, 'Choose other recordings'),
+      h('button', { type: 'button', className: 'btn quiet', onclick: () => useBox(state.box) }, 'Choose other recordings'),
       h('button', { type: 'button', className: `btn${remaining > 0 ? ' primary' : ''}`, id: 'save-again', onclick: beginSave }, 'Save again')
     ]
   }
 }
 
+const finishedInfo = () => openInfo({
+  title: 'Your recordings',
+  body: [
+    h('p', {}, 'They are in this folder:'),
+    h('p', { className: 'example' }, state.folder),
+    h('p', {}, 'They play in VLC, a free video player, or in a media library app such as Plex, Jellyfin or Kodi.'),
+    h('p', {}, 'Save again skips the recordings that are already saved and carries on with the rest.')
+  ]
+})
+
 const stat = ({ label, value, tone = '' }) => h('div', { className: `stat ${tone}` }, h('dt', {}, label), h('dd', {}, String(value)))
 
 const saveErrorScreen = () => ({
   content: [
-    h('h1', {}, 'The save could not start'),
-    h('p', { className: 'lead' }, state.save.error === 'no-space'
-      ? 'The folder has no free space. Choose a folder on a bigger drive.'
-      : 'Could not save into this folder. Choose another folder, then try again.')
+    h('h1', {}, 'Could not save here'),
+    h('p', { className: 'lead' }, state.save.error === 'no-space' ? 'The folder is full.' : 'Choose another folder.')
   ],
   actions: [
     h('span', { className: 'spacer' }),
@@ -643,18 +680,32 @@ const saveErrorScreen = () => ({
 const problemRow = (episode) => {
   const row = state.save.rows.get(episode.id)
   const show = state.shows.find(item => item.episodes.includes(episode))
-  return h('li', { className: 'row' },
-    h('div', { className: 'row-main' },
-      h('span', { className: 'row-text' },
-        h('span', { className: 'row-title' }, `${show?.title ?? ''}: ${episode.title}`),
-        h('span', { className: 'row-detail' }, row.reason || 'Not started.'))))
+  const reason = h('p', { className: 'drawer-text', hidden: true }, row.reason || 'Not started.')
+  const reveal = h('span', { className: 'row-reveal' }, 'Why')
+  const main = h('div', { className: 'row-main is-clickable', role: 'button', tabindex: '0', 'aria-expanded': 'false' },
+    h('span', { className: 'row-text' },
+      h('span', { className: 'row-title' }, `${show?.title ?? ''}: ${episode.title}`),
+      h('span', { className: 'row-detail' }, statusLabel(row))),
+    h('span', { className: 'row-side' }, reveal))
+  const toggle = () => {
+    reason.hidden = !reason.hidden
+    main.setAttribute('aria-expanded', String(!reason.hidden))
+    reveal.textContent = reason.hidden ? 'Why' : 'Hide'
+  }
+  main.addEventListener('click', toggle)
+  main.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    toggle()
+  })
+  return h('li', { className: 'row problem-row' }, main, reason)
 }
 
 const statusLabel = (row) => {
   if (row.status === 'saved') return 'Saved'
   if (row.status === 'already_saved') return 'Already saved'
   if (row.status === 'cancelled') return row.reason === 'Not started.' ? 'Not started' : 'Stopped'
-  return `Not saved. ${row.reason}`
+  return 'Not saved'
 }
 
 const statusClass = (status) => {
@@ -664,6 +715,28 @@ const statusClass = (status) => {
 }
 
 const isFinal = (status) => status !== 'waiting' && status !== 'saving'
+
+const headingWithInfo = ({ text, info }) => h('div', { className: 'heading-row' },
+  h('h1', {}, text),
+  infoButton({ label: `More about: ${text}`, onclick: info }))
+
+const infoButton = ({ label, onclick }) => h('button', { type: 'button', className: 'info-button', 'aria-label': label, title: label, onclick }, 'i')
+
+const setUpDialog = () => {
+  const dialog = document.getElementById('info-dialog')
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close() })
+  document.getElementById('info-close').addEventListener('click', () => dialog.close())
+}
+
+const openInfo = ({ title, body }) => {
+  const dialog = document.getElementById('info-dialog')
+  const opener = document.activeElement
+  document.getElementById('info-title').textContent = title
+  document.getElementById('info-body').replaceChildren(...body.filter(Boolean))
+  dialog.addEventListener('close', () => opener?.focus?.(), { once: true })
+  dialog.showModal()
+  document.getElementById('info-close').focus()
+}
 
 const showScreen = (step, screen) => {
   state.step = step
@@ -718,7 +791,7 @@ const h = (tag, props = {}, ...children) => {
 const setProp = ({ element, key, value }) => {
   if (value === undefined || value === null) return
   if (key.startsWith('on') && typeof value === 'function') return element.addEventListener(key.slice(2), value)
-  if (key.includes('-') || key === 'role' || key === 'novalidate') return element.setAttribute(key, String(value))
+  if (key.includes('-') || key === 'role' || key === 'novalidate' || key === 'tabindex') return element.setAttribute(key, String(value))
   element[key] = value
 }
 

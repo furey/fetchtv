@@ -34,8 +34,14 @@ export const describeBox = (location) => {
     id: location.url,
     name: location.friendlyName || 'Fetch box',
     model: location.modelName || '',
-    address: port === FETCH_PORT ? url.hostname : `${url.hostname}:${port}`
+    address: port === FETCH_PORT ? url.hostname : `${url.hostname}:${port}`,
+    key: boxKeyOf(location)
   }
+}
+
+const boxKeyOf = (location) => {
+  const udn = String(location._rawDeviceXml?.UDN ?? '').trim()
+  return udn || new URL(location.url).host
 }
 
 const SEARCH_ROUND_MS = 4000

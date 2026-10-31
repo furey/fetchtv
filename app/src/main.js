@@ -7,6 +7,7 @@ import { describeFolder } from './folders.js'
 import { listRecordings, pickEpisodes } from './recordings.js'
 import { startSave } from './saving.js'
 import { createSettings } from './settings.js'
+import { createHistory, savedStates } from './history.js'
 
 const PROJECT_URL = 'https://github.com/furey/fetchtv'
 const distDir = path.dirname(fileURLToPath(import.meta.url))
@@ -45,7 +46,7 @@ const start = () => {
   const settings = createSettings(app.getPath('userData'))
   blockRemoteRequests()
   Menu.setApplicationMenu(buildMenu())
-  registerIpc(settings)
+  registerIpc({ settings, history: createHistory(app.getPath('userData')) })
   state.window = createWindow()
 }
 
@@ -74,7 +75,7 @@ const createWindow = () => {
   return window
 }
 
-const registerIpc = (settings) => {
+const registerIpc = ({ settings, history }) => {
   handle('app:info', async () => ({
     version: FETCHTV_VERSION,
     settings: await settings.read(),
@@ -103,10 +104,19 @@ const registerIpc = (settings) => {
     const onProgress = (progress) => send('recordings:progress', progress)
     try {
       const { shows, summaries } = await listRecordings({ location, onProgress })
+      const box = describeBox(location)
+      const { lastFolder } = await settings.read()
+      const saved = await savedStates({
+        episodes: summaries.flatMap(show => show.episodes),
+        history: await history.read(),
+        boxKey: box.key,
+        folder: lastFolder || defaultSaveFolder()
+      })
       state.shows = shows
-      state.summaries = summaries
-      await settings.update({ lastAddress: describeBox(location).address })
-      return { shows: summaries }
+      state.summaries = summaries.map(show => ({ ...show, episodes: show.episodes.map(episode => ({ ...episode, saved: saved[episode.id] })) }))
+      state.boxKey = box.key
+      await settings.update({ lastAddress: box.address })
+      return { shows: state.summaries }
     } catch {
       return { error: 'list-failed' }
     }
@@ -133,7 +143,7 @@ const registerIpc = (settings) => {
     if (!isUsableFolder(folder)) return { error: 'invalid-folder' }
     const recordings = pickEpisodes({ shows: state.shows, episodeIds: toIdList(episodeIds) })
     await settings.update({ lastFolder: folder, forPlex: Boolean(forPlex) })
-    return runSave({ recordings, folder, forPlex: Boolean(forPlex) })
+    return runSave({ recordings, folder, forPlex: Boolean(forPlex), history })
   })
 
   handle('save:cancel', async () => {
@@ -158,7 +168,7 @@ const registerIpc = (settings) => {
   })
 }
 
-const runSave = async ({ recordings, folder, forPlex }) => {
+const runSave = async ({ recordings, folder, forPlex, history }) => {
   const blockerId = powerSaveBlocker.start('prevent-app-suspension')
   const save = startSave({
     recordings,
@@ -171,7 +181,9 @@ const runSave = async ({ recordings, folder, forPlex }) => {
   state.activeSave = save
   state.savedFolder = folder
   try {
-    return { summary: await save.done }
+    const { summary, results } = await save.done
+    await history.recordFolder({ folder, boxKey: state.boxKey, results }).catch(() => null)
+    return { summary }
   } catch (error) {
     return { error: error.code === 'ENOSPC' ? 'no-space' : 'save-failed' }
   } finally {

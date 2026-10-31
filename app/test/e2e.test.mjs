@@ -37,20 +37,20 @@ test('first run: no box found, type the address, choose episodes, save in the de
     await page.getByRole('heading', { name: 'No Fetch box found' }).waitFor({ timeout: 20000 })
     await capture({ app, page, name: '1-not-found' })
 
-    await page.getByLabel('IP address of the Fetch box').fill('300.1.2.3')
+    await page.getByLabel('Or type its IP address').fill('300.1.2.3')
     await page.getByRole('button', { name: 'Connect' }).click()
-    await page.getByText('Type the address as four numbers').waitFor()
+    await page.getByText('That is not an IP address.').waitFor()
 
-    await page.getByLabel('IP address of the Fetch box').fill(box.address)
+    await page.getByLabel('Or type its IP address').fill(box.address)
     await page.getByRole('button', { name: 'Connect' }).click()
-    await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
+    await page.getByRole('heading', { name: 'Choose recordings' }).waitFor()
     await capture({ app, page, name: '2-recordings' })
 
-    await page.getByRole('button', { name: 'Use a different box' }).click()
+    await page.getByRole('button', { name: 'Change', exact: true }).click()
     await page.getByRole('heading', { name: 'Fetch box found' }).waitFor({ timeout: 20000 })
     await capture({ app, page, name: '1-choose-box' })
     await page.getByRole('button', { name: /Test Fetch Box/ }).click()
-    await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
+    await page.getByRole('heading', { name: 'Choose recordings' }).waitFor()
 
     const harbour = page.locator('li.show-row[data-show="Harbour Lights"]')
     await harbour.locator('.row-main').first().click()
@@ -63,17 +63,17 @@ test('first run: no box found, type the address, choose episodes, save in the de
     await page.getByText('8 recordings selected').waitFor()
 
     await page.getByRole('button', { name: 'Next' }).click()
-    await page.getByRole('heading', { name: 'Choose where to save' }).waitFor()
+    await page.getByRole('heading', { name: 'Choose a folder' }).waitFor()
     await stubFolderPicker({ app, folder: saveFolder })
-    await page.getByRole('button', { name: 'Change folder' }).click()
+    await page.getByRole('button', { name: 'Change', exact: true }).click()
     await page.locator('#folder-path', { hasText: saveFolder }).waitFor()
-    await page.getByText('These recordings need about').waitFor()
+    await page.locator('#folder-info', { hasText: 'Needs' }).waitFor()
     await capture({ app, page, name: '3-folder' })
 
-    await page.getByRole('button', { name: 'Start saving' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     await page.getByRole('heading', { name: 'All done' }).waitFor({ timeout: 60000 })
     await capture({ app, page, name: '4-finished' })
-    assert.deepEqual(await totals(page), { 'Saved': '8', 'Already saved, so skipped': '0', 'Not saved': '0' })
+    assert.deepEqual(await totals(page), { 'Saved': '8', 'Already saved': '0', 'Not saved': '0' })
 
     const expected = [
       'Backyard Builders/S3 E1 - The Shed.ts',
@@ -103,17 +103,23 @@ test('next run: remembers the box and folder, saves in the Plex layout, then ski
   const app = await launchApp({ userData })
   try {
     const page = await openApp(app)
-    await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
+    await page.getByRole('heading', { name: 'Choose recordings' }).waitFor()
     await page.getByRole('button', { name: 'Select none' }).click()
     assert.equal(await page.getByRole('button', { name: 'Next' }).isDisabled(), true)
     await page.getByText('Nothing selected').waitFor()
     await page.getByRole('button', { name: 'Select all' }).click()
     await page.getByRole('button', { name: 'Next' }).click()
     await page.locator('#folder-path', { hasText: saveFolder }).waitFor()
-    await page.getByRole('switch', { name: 'Name files for Plex, Jellyfin or Kodi' }).click()
-    await page.getByText('Backyard Builders/Season 03/Backyard Builders - S03E01.ts').waitFor()
+    await page.getByRole('switch', { name: 'Names for Plex, Jellyfin or Kodi' }).click()
+    const infoButton = page.getByRole('button', { name: 'About names for Plex, Jellyfin or Kodi' })
+    await infoButton.click()
+    await page.locator('#example-on', { hasText: 'Backyard Builders/Season 03/Backyard Builders - S03E01.ts' }).waitFor()
+    await capture({ app, page, name: '3-folder-info' })
+    await page.keyboard.press('Escape')
+    await page.locator('#info-dialog').waitFor({ state: 'hidden' })
+    assert.equal(await infoButton.evaluate(button => document.activeElement === button), true)
     await capture({ app, page, name: '3-folder-plex' })
-    await page.getByRole('button', { name: 'Start saving' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     await page.getByRole('heading', { name: 'All done' }).waitFor({ timeout: 60000 })
 
     const files = await listFiles(saveFolder)
@@ -126,11 +132,14 @@ test('next run: remembers the box and folder, saves in the Plex layout, then ski
 
     await page.getByRole('button', { name: 'Save again' }).click()
     await page.getByRole('heading', { name: 'All done' }).waitFor({ timeout: 60000 })
-    assert.deepEqual(await totals(page), { 'Saved': '0', 'Already saved, so skipped': '9', 'Not saved': '0' })
+    assert.deepEqual(await totals(page), { 'Saved': '0', 'Already saved': '9', 'Not saved': '0' })
 
     await page.getByRole('button', { name: 'Choose other recordings' }).click()
+    await page.locator('#saved-summary', { hasText: '0 new · 9 already saved' }).waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Next' }).isDisabled(), true)
+    await page.getByRole('button', { name: 'Select all' }).click()
     await page.getByRole('button', { name: 'Next' }).click()
-    await page.getByText('9 of these recordings are already saved in this folder, so the save skips them.').waitFor()
+    await page.locator('#already-here', { hasText: '9 already here' }).waitFor()
   } finally {
     await app.close()
     await box.stop()
@@ -149,15 +158,15 @@ test('stop part way, then save again carries on from the partial file', async ()
   const app = await launchApp({ userData })
   try {
     const page = await openApp(app)
-    await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
+    await page.getByRole('heading', { name: 'Choose recordings' }).waitFor()
     await page.getByRole('button', { name: 'Next' }).click()
-    await page.getByRole('button', { name: 'Start saving' }).click()
-    await page.getByRole('heading', { name: 'Saving recordings' }).waitFor()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await page.getByRole('heading', { name: 'Saving', exact: true }).waitFor()
     await page.locator('.status', { hasText: / MB of / }).first().waitFor()
     await page.waitForTimeout(1500)
     await capture({ app, page, name: '4-saving' })
-    await page.getByRole('button', { name: 'Stop saving' }).click()
-    await page.getByRole('heading', { name: 'Save stopped' }).waitFor({ timeout: 30000 })
+    await page.getByRole('button', { name: 'Stop', exact: true }).click()
+    await page.getByRole('heading', { name: 'Stopped', exact: true }).waitFor({ timeout: 30000 })
     await capture({ app, page, name: '4-stopped' })
 
     const files = await listFiles(saveFolder)
@@ -187,12 +196,13 @@ test('a recording the box keeps cutting off is listed as not saved, with a plain
   const app = await launchApp({ userData })
   try {
     const page = await openApp(app)
-    await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
+    await page.getByRole('heading', { name: 'Choose recordings' }).waitFor()
     await page.getByRole('button', { name: 'Next' }).click()
-    await page.getByRole('button', { name: 'Start saving' }).click()
-    await page.getByRole('heading', { name: 'Finished, but some recordings were not saved' }).waitFor({ timeout: 60000 })
-    assert.deepEqual(await totals(page), { 'Saved': '3', 'Already saved, so skipped': '0', 'Not saved': '1' })
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await page.getByRole('heading', { name: 'Some not saved' }).waitFor({ timeout: 60000 })
+    assert.deepEqual(await totals(page), { 'Saved': '3', 'Already saved': '0', 'Not saved': '1' })
     await page.locator('#problem-list').getByText('Harbour Lights: S1 E2 - Low Tide').waitFor()
+    await page.locator('#problem-list .row-main').first().click()
     await page.locator('#problem-list').getByText('The copy stopped part way, even after trying again.').waitFor()
     await capture({ app, page, name: '4-finished-not-saved' })
   } finally {
@@ -208,9 +218,76 @@ test('a box with no recordings explains why the list is empty', async () => {
   const app = await launchApp({ userData })
   try {
     const page = await openApp(app)
-    await page.getByRole('heading', { name: 'No recordings on this Fetch box' }).waitFor()
-    await page.getByText('A Fetch box whose account is cancelled shows its setup screen on the TV and lists no recordings.').waitFor()
+    await page.getByRole('heading', { name: 'No recordings on this box' }).waitFor()
     await capture({ app, page, name: '2-empty' })
+    await page.getByRole('button', { name: 'More about: No recordings on this box' }).click()
+    await page.locator('#cancelled-account', { hasText: 'A Fetch box whose account is cancelled shows its setup screen on the TV and lists no recordings.' }).waitFor()
+    await page.mouse.click(5, 5)
+    await page.locator('#info-dialog').waitFor({ state: 'hidden' })
+  } finally {
+    await app.close()
+    await box.stop()
+  }
+})
+
+test('saved recordings: still there is unticked, moved or deleted is ticked with the reason, new is ticked', async () => {
+  const box = await startFakeBox({ shows: [demoShows()[0]] })
+  const userData = await freshDir('user-data-history')
+  const saveFolder = await freshDir('history')
+  await fs.writeFile(path.join(userData, 'settings.json'), JSON.stringify({ lastAddress: box.address, lastFolder: saveFolder }))
+  const first = await launchApp({ userData })
+  try {
+    const page = await openApp(first)
+    await page.getByRole('heading', { name: 'Choose recordings' }).waitFor()
+    await page.locator('#saved-summary', { hasText: '4 new' }).waitFor()
+    await page.getByRole('button', { name: 'Select none' }).click()
+    const harbour = page.locator('li.show-row[data-show="Harbour Lights"]')
+    await harbour.locator('.row-main').first().click()
+    await harbour.getByLabel('S1 E1 - The Lighthouse Keeper').check()
+    await harbour.getByLabel('S1 E2 - Low Tide').check()
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await page.getByRole('heading', { name: 'All done' }).waitFor({ timeout: 60000 })
+  } finally {
+    await first.close()
+  }
+  await fs.rm(path.join(saveFolder, 'Harbour Lights', 'S1 E2 - Low Tide.ts'))
+  const second = await launchApp({ userData })
+  try {
+    const page = await openApp(second)
+    await page.locator('#saved-summary', { hasText: '2 new · 1 already saved · 1 moved or deleted' }).waitFor()
+    const harbour = page.locator('li.show-row[data-show="Harbour Lights"]')
+    await harbour.locator('.row-main').first().click()
+    const row = (title) => harbour.locator('.episode-row', { hasText: title })
+    assert.equal(await row('S1 E1').locator('.row-main').getAttribute('data-saved'), 'saved')
+    assert.equal(await harbour.getByLabel('S1 E1 - The Lighthouse Keeper').isChecked(), false)
+    await row('S1 E1').getByText('Saved', { exact: true }).waitFor()
+    assert.equal(await row('S1 E2').locator('.row-main').getAttribute('data-saved'), 'missing')
+    assert.equal(await harbour.getByLabel('S1 E2 - Low Tide').isChecked(), true)
+    await row('S1 E2').getByText(/The file is no longer there\./).waitFor()
+    assert.equal(await row('S1 E3').locator('.row-main').getAttribute('data-saved'), 'new')
+    assert.equal(await harbour.getByLabel('S1 E3 - Storm Warning').isChecked(), true)
+    await capture({ app: second, page, name: '2-recordings-history' })
+  } finally {
+    await second.close()
+    await box.stop()
+  }
+})
+
+test('saved recordings: a fetchtv.json in the folder marks files saved by the command-line tool', async () => {
+  const box = await startFakeBox({ shows: [demoShows()[0]] })
+  const userData = await freshDir('user-data-cli')
+  const saveFolder = await freshDir('cli')
+  const item = [...box.catalogue.items.values()].find(entry => entry.title === 'S1 E3 - Storm Warning')
+  await fs.mkdir(path.join(saveFolder, 'Harbour Lights'), { recursive: true })
+  await fs.writeFile(path.join(saveFolder, 'Harbour Lights', 'S1 E3 - Storm Warning.ts'), recordingBytes(item))
+  await fs.writeFile(path.join(saveFolder, 'fetchtv.json'), JSON.stringify({ [item.id]: { title: item.title, size: item.actualSize, path: 'Harbour Lights/S1 E3 - Storm Warning.ts' } }))
+  await fs.writeFile(path.join(userData, 'settings.json'), JSON.stringify({ lastAddress: box.address, lastFolder: saveFolder }))
+  const app = await launchApp({ userData })
+  try {
+    const page = await openApp(app)
+    await page.locator('#saved-summary', { hasText: '3 new · 1 already saved' }).waitFor()
+    assert.equal(await page.locator(`.episode-row[data-episode="${item.id}"] .row-main`).getAttribute('data-saved'), 'saved')
   } finally {
     await app.close()
     await box.stop()
@@ -226,7 +303,7 @@ test('the window is locked down: isolated, sandboxed, no Node in the page, stric
     const page = await openApp(app)
     const consoleErrors = []
     page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()) })
-    await page.getByRole('heading', { name: 'Choose the recordings to save' }).waitFor()
+    await page.getByRole('heading', { name: 'Choose recordings' }).waitFor()
     const preferences = await app.evaluate(({ BrowserWindow }) => {
       const contents = BrowserWindow.getAllWindows()[0].webContents
       const { contextIsolation, nodeIntegration, sandbox, webSecurity } = contents.getLastWebPreferences()
@@ -264,7 +341,7 @@ test('discovery: finds a Fetch box on the network without typing an address', { 
   const app = await launchApp({ userData, discovery: true })
   try {
     const page = await openApp(app)
-    const listed = page.getByRole('heading', { name: 'Choose the recordings to save' })
+    const listed = page.getByRole('heading', { name: 'Choose recordings' })
     const choose = page.getByRole('heading', { name: 'Choose your Fetch box' })
     await Promise.race([listed.waitFor({ timeout: 20000 }), choose.waitFor({ timeout: 20000 })])
     if (await choose.isVisible()) {
@@ -295,9 +372,13 @@ const launchApp = async ({ userData, discovery = false }) => {
 const openApp = async (app) => {
   const page = await app.firstWindow()
   await page.getByRole('heading', { name: 'Fetch My Recordings' }).waitFor()
-  await page.getByText('It is not made, endorsed, or supported by Fetch TV.').waitFor()
   await capture({ app, page, name: '0-welcome' })
   if (screenshotDir) await captureAtSize({ app, page, name: '0-welcome-minimum', width: 640, height: 560 })
+  await page.getByRole('button', { name: 'About this app' }).click()
+  await page.locator('#independence', { hasText: 'It is not made, endorsed, or supported by Fetch TV.' }).waitFor()
+  await capture({ app, page, name: '0-about' })
+  await page.keyboard.press('Escape')
+  await page.locator('#info-dialog').waitFor({ state: 'hidden' })
   await page.getByRole('button', { name: 'Start', exact: true }).click()
   return page
 }

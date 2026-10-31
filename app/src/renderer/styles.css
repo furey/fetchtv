@@ -880,8 +880,8 @@ p {
 
 .setting {
   display: flex;
-  align-items: flex-start;
-  gap: 18px;
+  align-items: center;
+  gap: 14px;
   margin-top: 24px;
 }
 
@@ -1002,4 +1002,120 @@ p {
 
 .row-side-value {
   display: block;
+}
+
+.heading-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.heading-row h1 {
+  margin: 0;
+}
+
+.label-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.label-row label {
+  width: auto;
+}
+
+.info-button {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: italic 700 16px/1 Georgia, "Times New Roman", serif;
+  cursor: pointer;
+  transition: background-color var(--motion) var(--ease), color var(--motion) var(--ease);
+}
+
+@media (hover: hover) {
+  .info-button:hover { background: var(--surface-3); color: var(--text-1); }
+}
+
+.dialog {
+  width: min(560px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--surface-1);
+  color: var(--text-1);
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.dialog-inner {
+  padding: 22px 24px 24px;
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.dialog-head h2 {
+  margin: 0;
+}
+
+.dialog-body p {
+  margin: 0 0 12px;
+}
+
+.dialog-body .how {
+  margin-bottom: 18px;
+}
+
+.dialog-body .how li {
+  background: var(--surface-2);
+}
+
+.dialog-body .example {
+  display: block;
+  margin-top: 0;
+}
+
+.drawer-text {
+  margin: 0 0 14px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: rgba(7, 11, 15, 0.55);
+  color: var(--text-soft);
+  font-size: 15px;
+}
+
+.row-side.is-saved {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.episode-row .row-main[data-saved="missing"] .row-detail {
+  color: var(--warning);
+}
+
+.welcome .link {
+  margin-top: 4px;
+}
+
+body.is-welcome main {
+  display: grid;
+  align-content: center;
 }

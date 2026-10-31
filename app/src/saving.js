@@ -60,5 +60,5 @@ const runSave = async ({ recordings, folder, forPlex, retryDelays, onProgress, o
     },
     signal
   })
-  return summariseResults(described)
+  return { summary: summariseResults(described), results: described }
 }
