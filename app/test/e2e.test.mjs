@@ -66,7 +66,7 @@ test('first run: no box found, type the address, choose episodes, save in the de
     await page.getByRole('heading', { name: 'Choose a folder' }).waitFor()
     await stubFolderPicker({ app, folder: saveFolder })
     await page.getByRole('button', { name: 'Change', exact: true }).click()
-    await page.locator('#folder-path', { hasText: saveFolder }).waitFor()
+    await page.locator(`#folder-path[data-path="${saveFolder}"]`).waitFor()
     await page.locator('#folder-info', { hasText: 'Needs' }).waitFor()
     await capture({ app, page, name: '3-folder' })
 
@@ -98,7 +98,7 @@ test('first run: no box found, type the address, choose episodes, save in the de
 test('next run: remembers the box and folder, saves in the Plex layout, then skips what is saved', async () => {
   const box = await startFakeBox({ port: 0 })
   const userData = await freshDir('user-data-plex')
-  const saveFolder = await freshDir('plex')
+  const saveFolder = path.join(await freshDir('plex'), 'Movies', 'Fetch recordings')
   await fs.writeFile(path.join(userData, 'settings.json'), JSON.stringify({ lastAddress: box.address, lastFolder: saveFolder }))
   const app = await launchApp({ userData })
   try {
@@ -109,7 +109,7 @@ test('next run: remembers the box and folder, saves in the Plex layout, then ski
     await page.getByText('Nothing selected').waitFor()
     await page.getByRole('button', { name: 'Select all' }).click()
     await page.getByRole('button', { name: 'Next' }).click()
-    await page.locator('#folder-path', { hasText: saveFolder }).waitFor()
+    await page.locator(`#folder-path[data-path="${saveFolder}"]`).waitFor()
     await page.getByRole('switch', { name: 'Names for Plex, Jellyfin or Kodi' }).click()
     const infoButton = page.getByRole('button', { name: 'About names for Plex, Jellyfin or Kodi' })
     await infoButton.click()
@@ -264,7 +264,11 @@ test('saved recordings: still there is unticked, moved or deleted is ticked with
     await row('S1 E1').getByText('Saved', { exact: true }).waitFor()
     assert.equal(await row('S1 E2').locator('.row-main').getAttribute('data-saved'), 'missing')
     assert.equal(await harbour.getByLabel('S1 E2 - Low Tide').isChecked(), true)
-    await row('S1 E2').getByText(/The file is no longer there\./).waitFor()
+    await row('S1 E2').getByRole('button', { name: 'Moved or deleted' }).click()
+    await page.locator('#missing-detail', { hasText: 'to Harbour Lights/S1 E2 - Low Tide.ts. It is no longer there.' }).waitFor()
+    assert.equal(await harbour.getByLabel('S1 E2 - Low Tide').isChecked(), true)
+    await page.keyboard.press('Escape')
+    await page.locator('#info-dialog').waitFor({ state: 'hidden' })
     assert.equal(await row('S1 E3').locator('.row-main').getAttribute('data-saved'), 'new')
     assert.equal(await harbour.getByLabel('S1 E3 - Storm Warning').isChecked(), true)
     await capture({ app: second, page, name: '2-recordings-history' })
@@ -397,6 +401,7 @@ const stubFolderPicker = ({ app, folder }) => app.evaluate(({ dialog }, chosen) 
 const capture = async ({ app, page, name }) => {
   if (!screenshotDir) return
   await page.mouse.move(0, 0)
+  await page.evaluate(() => { if (!document.querySelector('dialog[open]')) document.activeElement?.blur() })
   await page.waitForTimeout(200)
   await page.screenshot({ path: path.join(screenshotDir, `${name}.png`) })
 }

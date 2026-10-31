@@ -1107,9 +1107,6 @@ p {
   font-weight: 700;
 }
 
-.episode-row .row-main[data-saved="missing"] .row-detail {
-  color: var(--warning);
-}
 
 .welcome .link {
   margin-top: 4px;
@@ -1118,4 +1115,45 @@ p {
 body.is-welcome main {
   display: grid;
   align-content: center;
+}
+
+.folder-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-name {
+  display: block;
+  font-size: 19px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.folder-parent {
+  display: block;
+  font-size: 15px;
+  color: var(--text-2);
+}
+
+.status-button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.status-button.is-warning {
+  color: var(--warning);
+}
+
+@media (hover: hover) {
+  .status-button.is-warning:hover { background: var(--warning-tint); }
+}
+
+.selectable {
+  user-select: text;
+  overflow-wrap: anywhere;
 }

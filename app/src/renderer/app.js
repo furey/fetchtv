@@ -114,7 +114,7 @@ const changeFolder = async () => {
   const { folder } = await api.chooseFolder({ current: state.folder })
   if (!folder) return
   state.folder = folder
-  document.getElementById('folder-path').textContent = folder
+  document.getElementById('folder-path').replaceWith(folderLabel())
   await refreshFolderInfo()
 }
 
@@ -382,13 +382,12 @@ const episodeRow = ({ episode, onChange }) => {
     onChange()
   })
   const savedState = savedStateOf(episode)
-  const side = episode.stillRecording ? '' : savedState === 'saved' ? 'Saved' : formatBytes(episode.size)
   const main = h('div', { className: `row-main${episode.stillRecording ? '' : ' is-clickable'}`, 'data-saved': savedState },
     h('label', { className: 'check', onclick: (event) => event.stopPropagation() }, checkbox),
     h('span', { className: 'row-text' },
       h('span', { className: 'row-title' }, episode.title),
       h('span', { className: 'row-detail' }, episodeDetail(episode))),
-    h('span', { className: `row-side ${savedState === 'saved' ? 'is-saved' : 'mono'}` }, side))
+    episodeSide({ episode, savedState }))
   main.addEventListener('click', () => { if (!checkbox.disabled) checkbox.click() })
   return {
     element: h('li', { className: 'row episode-row', 'data-episode': episode.id }, main),
@@ -396,17 +395,39 @@ const episodeRow = ({ episode, onChange }) => {
   }
 }
 
-const episodeDetail = (episode) => {
-  if (episode.stillRecording) return 'Still recording'
-  const saved = episode.saved ?? { state: 'new' }
-  if (saved.state === 'missing') return `Saved ${savedDate(saved.savedAt)}to ${saved.path}. The file is no longer there.`
-  if (saved.state === 'saved') return `${formatDuration(episode.duration)} · in ${parentFolder(saved.path)}`
-  return formatDuration(episode.duration)
+const episodeDetail = (episode) => (episode.stillRecording ? 'Still recording' : formatDuration(episode.duration))
+
+const episodeSide = ({ episode, savedState }) => {
+  if (episode.stillRecording) return h('span', { className: 'row-side' })
+  if (savedState === 'saved') return h('span', { className: 'row-side is-saved' }, 'Saved')
+  if (savedState === 'missing') {
+    return h('span', { className: 'row-side' }, h('button', {
+      type: 'button',
+      className: 'status-button is-warning',
+      onclick: (event) => {
+        event.stopPropagation()
+        missingInfo(episode)
+      }
+    }, 'Moved or deleted'))
+  }
+  return h('span', { className: 'row-side mono' }, formatBytes(episode.size))
+}
+
+const missingInfo = (episode) => {
+  const { path: filePath, savedAt } = episode.saved
+  openInfo({
+    title: 'Moved or deleted',
+    body: [
+      h('p', { id: 'missing-detail' }, `Saved ${savedDate(savedAt)}to ${lastParts(filePath, 2)}. It is no longer there.`),
+      h('p', { className: 'example selectable' }, filePath),
+      h('p', { className: 'meta' }, 'It is ticked, so Save copies it again.')
+    ]
+  })
 }
 
 const savedDate = (iso) => (iso ? `on ${new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })} ` : '')
 
-const parentFolder = (filePath) => filePath.split(/[\\/]/).slice(-2, -1)[0] ?? filePath
+const lastParts = (filePath, count) => filePath.split(/[\\/]/).filter(Boolean).slice(-count).join('/')
 
 const savedStateOf = (episode) => episode.saved?.state ?? 'new'
 
@@ -458,7 +479,8 @@ const folderScreen = () => {
       h('h1', {}, 'Choose a folder'),
       h('div', { className: 'panel' },
         h('div', { className: 'folder' },
-          h('span', { className: 'folder-path', id: 'folder-path' }, state.folder),
+          folderLabel(),
+          infoButton({ label: 'Full path of the folder', onclick: folderInfo }),
           h('button', { type: 'button', className: 'btn', id: 'change-folder', onclick: changeFolder }, 'Change')),
         h('div', { id: 'folder-info', 'aria-live': 'polite' })),
       h('div', { className: 'setting' },
@@ -473,6 +495,17 @@ const folderScreen = () => {
     ]
   }
 }
+
+const folderLabel = () => h('span', { className: 'folder-label', id: 'folder-path', title: state.folder, 'data-path': state.folder },
+  h('span', { className: 'folder-name' }, lastParts(state.folder, 1)),
+  h('span', { className: 'folder-parent' }, `in ${lastParts(parentOf(state.folder), 1) || 'this computer'}`))
+
+const parentOf = (folder) => folder.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]*$/, '')
+
+const folderInfo = () => openInfo({
+  title: 'Folder',
+  body: [h('p', { className: 'example selectable', id: 'folder-full-path' }, state.folder)]
+})
 
 const plexInfo = () => openInfo({
   title: 'Names for Plex, Jellyfin or Kodi',
