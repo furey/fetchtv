@@ -1186,3 +1186,92 @@ body.is-welcome main {
 .dialog-body .github-link {
   font-size: 15px;
 }
+
+.mark.is-animated {
+  overflow: visible;
+}
+
+.mark.is-animated .mark-chip {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: mark-chip-drop 6s linear infinite both;
+}
+
+.mark.is-animated .mark-chip.is-yellow { animation-delay: 0ms; }
+.mark.is-animated .mark-chip.is-orange { animation-delay: 220ms; }
+.mark.is-animated .mark-chip.is-blue { animation-delay: 440ms; }
+
+body.is-hidden .mark.is-animated .mark-chip {
+  animation-play-state: paused;
+}
+
+@keyframes mark-chip-drop {
+  0% {
+    opacity: 0;
+    transform: translateY(-22px);
+    animation-timing-function: cubic-bezier(0.5, 0, 0.9, 0.6);
+  }
+  3% {
+    opacity: 1;
+  }
+  8% {
+    opacity: 1;
+    transform: translateY(0) scale(1.08, 0.86);
+    animation-timing-function: cubic-bezier(0.2, 0.8, 0.4, 1);
+  }
+  11.5% {
+    transform: translateY(-1.5px) scale(0.97, 1.04);
+    animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  15% {
+    opacity: 1;
+    transform: none;
+  }
+  82% {
+    opacity: 1;
+    transform: none;
+  }
+  83% {
+    opacity: 0;
+    transform: translateY(-22px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-22px);
+  }
+}
+
+.mark.is-animated .mark-chips {
+  animation: mark-chips-leave 6s linear infinite both;
+}
+
+body.is-hidden .mark.is-animated .mark-chips {
+  animation-play-state: paused;
+}
+
+@keyframes mark-chips-leave {
+  0%, 70% {
+    opacity: 1;
+    transform: none;
+    animation-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  }
+  78% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  99.99% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mark.is-animated .mark-chip,
+  .mark.is-animated .mark-chips {
+    animation: none;
+  }
+}

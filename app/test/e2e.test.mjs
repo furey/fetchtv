@@ -298,6 +298,34 @@ test('saved recordings: a fetchtv.json in the folder marks files saved by the co
   }
 })
 
+test('welcome mark: the animation rests on the exact mark.svg shapes, loops, and stops for reduced motion', async () => {
+  const userData = await freshDir('user-data-mark')
+  const app = await launchApp({ userData })
+  try {
+    const page = await app.firstWindow()
+    await page.getByRole('heading', { name: 'Fetch My Recordings' }).waitFor()
+    const markFile = await fs.readFile(path.join(appRoot, 'src', 'renderer', 'mark.svg'), 'utf8')
+    const fileShapes = {
+      chips: [...markFile.matchAll(/<rect ([^>]*)\/>/g)].map(([, attributes]) => attributesOf(attributes)),
+      tray: attributesOf(markFile.match(/<path ([^>]*)\/>/)[1])
+    }
+    const pageShapes = await page.evaluate(() => {
+      const read = (element) => Object.fromEntries([...element.attributes].filter(attribute => attribute.name !== 'class').map(attribute => [attribute.name, attribute.value]))
+      const mark = document.getElementById('welcome-mark')
+      return { chips: [...mark.querySelectorAll('rect')].map(read), tray: read(mark.querySelector('path')) }
+    })
+    assert.deepEqual(pageShapes, fileShapes)
+    const running = await page.evaluate(() => document.getAnimations().filter(animation => animation.animationName === 'mark-chip-drop').map(animation => animation.effect.getTiming().iterations))
+    assert.deepEqual(running, [Infinity, Infinity, Infinity])
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    assert.equal(await page.evaluate(() => document.getAnimations().filter(animation => animation.animationName.startsWith('mark-chip')).length), 0)
+  } finally {
+    await app.close()
+  }
+})
+
+const attributesOf = (text) => Object.fromEntries([...text.matchAll(/([a-z-]+)="([^"]*)"/g)].map(([, name, value]) => [name, value]))
+
 test('the window is locked down: isolated, sandboxed, no Node in the page, strict CSP', async () => {
   const box = await startFakeBox()
   const userData = await freshDir('user-data-security')

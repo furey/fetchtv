@@ -25,6 +25,7 @@ const start = async () => {
   document.getElementById('footer-github').replaceWith(githubLink())
   setUpSoundToggle(state.info.settings.sound !== false)
   setUpDialog()
+  pauseWhenHidden()
   api.onListProgress(showListProgress)
   api.onSaveProgress(updateSaveProgress)
   api.onSaveResult(updateSaveResult)
@@ -150,7 +151,7 @@ const stopSave = async (button) => {
 const welcomeScreen = () => ({
   content: [
     h('section', { className: 'welcome' },
-      markElement({ large: true }),
+      animatedMark(),
       h('h1', {}, 'Fetch My Recordings'),
       h('p', { className: 'lead' }, 'Copy the recordings on your Fetch box to this computer.'),
       h('button', { type: 'button', className: 'link', id: 'about-app', onclick: openAbout }, 'About this app'))
@@ -809,6 +810,35 @@ const githubLink = () => {
     title: PROJECT_URL,
     onclick: () => api.openProjectPage()
   }, icon, h('span', {}, 'furey/fetchtv'))
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg'
+const MARK_CHIPS = [
+  { name: 'blue', y: 11, fill: '#3ba4ff' },
+  { name: 'orange', y: 23, fill: '#f28c28' },
+  { name: 'yellow', y: 35, fill: '#f5c542' }
+]
+const MARK_TRAY = 'M9 28V44Q9 50 15 50H49Q55 50 55 44V28'
+
+const svgElement = (tag, attributes) => {
+  const element = document.createElementNS(SVG_NS, tag)
+  Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, String(value)))
+  return element
+}
+
+const animatedMark = () => {
+  const svg = svgElement('svg', { viewBox: '0 0 64 64', width: 104, height: 104, class: 'mark is-large is-animated', role: 'img', 'aria-label': 'Fetch My Recordings', id: 'welcome-mark' })
+  const chips = svgElement('g', { class: 'mark-chips' })
+  MARK_CHIPS.forEach(chip => chips.append(svgElement('rect', { x: 16, y: chip.y, width: 32, height: 8, rx: 2.5, fill: chip.fill, class: `mark-chip is-${chip.name}` })))
+  svg.append(chips)
+  svg.append(svgElement('path', { d: MARK_TRAY, fill: 'none', stroke: '#5ce1c6', 'stroke-width': 6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: 'mark-tray' }))
+  return svg
+}
+
+const pauseWhenHidden = () => {
+  const apply = () => document.body.classList.toggle('is-hidden', document.visibilityState === 'hidden')
+  document.addEventListener('visibilitychange', apply)
+  apply()
 }
 
 const markElement = ({ large = false } = {}) => h('img', { className: `mark${large ? ' is-large' : ''}`, src: 'mark.svg', alt: '', width: large ? 104 : 36, height: large ? 104 : 36 })
