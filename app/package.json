@@ -1,6 +1,6 @@
 {
   "name": "fetchtv-desktop",
-  "productName": "fetchtv",
+  "productName": "Fetch My Recordings",
   "version": "0.0.0",
   "private": true,
   "description": "Copy the recordings on a Fetch box to a folder on this computer.",

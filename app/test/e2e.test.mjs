@@ -130,7 +130,7 @@ test('next run: remembers the box and folder, saves in the Plex layout, then ski
 
     await page.getByRole('button', { name: 'Choose other recordings' }).click()
     await page.getByRole('button', { name: 'Next' }).click()
-    await page.getByText('9 of these recordings are already saved in this folder, so fetchtv skips them.').waitFor()
+    await page.getByText('9 of these recordings are already saved in this folder, so the save skips them.').waitFor()
   } finally {
     await app.close()
     await box.stop()
@@ -294,11 +294,19 @@ const launchApp = async ({ userData, discovery = false }) => {
 
 const openApp = async (app) => {
   const page = await app.firstWindow()
-  await page.getByRole('heading', { name: 'Copy your Fetch recordings' }).waitFor()
+  await page.getByRole('heading', { name: 'Fetch My Recordings' }).waitFor()
   await page.getByText('It is not made, endorsed, or supported by Fetch TV.').waitFor()
   await capture({ app, page, name: '0-welcome' })
+  if (screenshotDir) await captureAtSize({ app, page, name: '0-welcome-minimum', width: 640, height: 560 })
   await page.getByRole('button', { name: 'Start', exact: true }).click()
   return page
+}
+
+const captureAtSize = async ({ app, page, name, width, height }) => {
+  const original = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
+  await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height), { width, height })
+  await capture({ app, page, name })
+  await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size[0], size[1]), original)
 }
 
 const stubFolderPicker = ({ app, folder }) => app.evaluate(({ dialog }, chosen) => {

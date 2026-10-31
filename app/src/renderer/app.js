@@ -22,7 +22,7 @@ const start = async () => {
   state.folder = state.info.settings.lastFolder || state.info.defaultFolder
   state.forPlex = Boolean(state.info.settings.forPlex)
   document.getElementById('about-line').textContent =
-    `fetchtv ${state.info.version} · Free and open source (GPL-3.0-or-later) · Not affiliated with Fetch TV`
+    `Fetch My Recordings ${state.info.version} · Free and open source · Not affiliated with Fetch TV`
   document.getElementById('project-link').addEventListener('click', () => api.openProjectPage())
   setUpSoundToggle(state.info.settings.sound !== false)
   api.onListProgress(showListProgress)
@@ -151,16 +151,16 @@ const welcomeScreen = () => ({
   content: [
     h('section', { className: 'welcome' },
       markElement({ large: true }),
-      h('h1', {}, 'Copy your Fetch recordings'),
-      h('p', { className: 'lead' }, 'fetchtv copies the recordings on your Fetch box to a folder on this computer, so you can keep them and watch them anywhere.'),
+      h('h1', {}, 'Fetch My Recordings'),
+      h('p', { className: 'lead' }, 'Copies the recordings on your Fetch box to a folder on this computer, so you can keep them and watch them anywhere.'),
       h('ol', { className: 'how' },
         h('li', {}, 'Find the Fetch box on your home network'),
         h('li', {}, 'Choose the recordings you want'),
         h('li', {}, 'Choose a folder, then save')),
       h('p', { className: 'reassure' },
-        'fetchtv is free and open source. It talks only to your Fetch box, on your home network. It needs no Fetch account, and it deletes nothing from the box.'),
+        'Free and open source, built on the fetchtv command-line tool. It talks only to your Fetch box, on your home network. It needs no Fetch account, and it deletes nothing from the box.'),
       h('p', { className: 'reassure', id: 'independence' },
-        'fetchtv is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner.'))
+        'Fetch My Recordings is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner.'))
   ],
   actions: [
     h('span', { className: 'spacer' }),
@@ -172,7 +172,7 @@ const welcomeScreen = () => ({
 const searchingScreen = () => ({
   content: [
     h('h1', {}, 'Looking for your Fetch box'),
-    h('p', { className: 'lead' }, 'fetchtv is searching your home network. This takes up to 10 seconds.'),
+    h('p', { className: 'lead' }, 'Searching your home network. This takes up to 10 seconds.'),
     h('div', { className: 'progress is-busy searching', role: 'progressbar', 'aria-label': 'Searching' }, h('span', {}))
   ]
 })
@@ -467,20 +467,20 @@ const renderFolderInfo = () => {
 }
 
 const folderInfoLines = (info) => {
-  if (!info.canWrite) return [h('p', { className: 'notice', role: 'alert' }, 'fetchtv cannot save to this folder. Choose another folder.')]
+  if (!info.canWrite) return [h('p', { className: 'notice', role: 'alert' }, 'Saving to this folder is not allowed. Choose another folder.')]
   const free = info.freeBytes === null ? 'unknown' : formatBytes(info.freeBytes)
   const lines = [h('div', { className: 'space' },
     h('span', {}, 'Free space ', h('strong', {}, free)),
     h('span', {}, 'These recordings need about ', h('strong', {}, formatBytes(info.neededBytes))))]
   if (info.alreadySavedCount > 0) {
     const one = info.alreadySavedCount === 1
-    lines.push(h('p', { className: 'meta space-note' }, `${info.alreadySavedCount} of these recordings ${one ? 'is' : 'are'} already saved in this folder, so fetchtv skips ${one ? 'it' : 'them'}.`))
+    lines.push(h('p', { className: 'meta space-note' }, `${info.alreadySavedCount} of these recordings ${one ? 'is' : 'are'} already saved in this folder, so the save skips ${one ? 'it' : 'them'}.`))
   }
   if (info.freeBytes !== null && info.neededBytes > info.freeBytes) {
     lines.push(h('p', { className: 'notice', role: 'alert' },
-      'There is not enough free space for all of these recordings. fetchtv saves what fits. To save them all, choose a folder on a bigger drive, or go back and choose fewer recordings.'))
+      'There is not enough free space for all of these recordings. The save copies what fits. To save them all, choose a folder on a bigger drive, or go back and choose fewer recordings.'))
   }
-  if (!info.exists) lines.push(h('p', { className: 'meta space-note' }, 'This folder does not exist yet. fetchtv makes it when the save starts.'))
+  if (!info.exists) lines.push(h('p', { className: 'meta space-note' }, 'This folder does not exist yet. The save makes it when it starts.'))
   return lines
 }
 
@@ -609,7 +609,7 @@ const finishedScreen = () => {
         stat({ label: 'Not saved', value: summary.notSaved, tone: summary.notSaved > 0 ? 'is-bad' : '' }),
         summary.stopped > 0 ? stat({ label: 'Stopped', value: summary.stopped }) : null),
       remaining > 0
-        ? h('p', {}, 'To finish the rest, press Save again. fetchtv skips the recordings that are already saved and carries on with the others.')
+        ? h('p', {}, 'To finish the rest, press Save again. It skips the recordings that are already saved and carries on with the others.')
         : h('p', {}, 'The files play in VLC, a free video player, or in a media library app such as Plex, Jellyfin or Kodi.'),
       problemRows.length > 0 ? h('h2', {}, 'Not saved') : null,
       problemRows.length > 0
@@ -632,7 +632,7 @@ const saveErrorScreen = () => ({
     h('h1', {}, 'The save could not start'),
     h('p', { className: 'lead' }, state.save.error === 'no-space'
       ? 'The folder has no free space. Choose a folder on a bigger drive.'
-      : 'fetchtv could not save into this folder. Choose another folder, then try again.')
+      : 'Could not save into this folder. Choose another folder, then try again.')
   ],
   actions: [
     h('span', { className: 'spacer' }),
@@ -683,8 +683,7 @@ const showScreen = (step, screen) => {
   view.focus({ preventScroll: true })
 }
 
-const markElement = ({ large = false } = {}) => h('span', { className: `mark${large ? ' is-large' : ''}`, role: 'img', 'aria-label': 'fetchtv' },
-  h('span', { className: 'chip blue' }), h('span', { className: 'chip orange' }), h('span', { className: 'chip yellow' }), h('span', { className: 'tray' }))
+const markElement = ({ large = false } = {}) => h('img', { className: `mark${large ? ' is-large' : ''}`, src: 'mark.svg', alt: '', width: large ? 104 : 36, height: large ? 104 : 36 })
 
 const savableEpisodes = (shows) => shows.flatMap(show => show.episodes).filter(episode => !episode.stillRecording)
 

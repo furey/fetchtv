@@ -28,10 +28,10 @@ const main = () => {
   if (!app.requestSingleInstanceLock()) return app.quit()
   app.enableSandbox()
   app.setAboutPanelOptions({
-    applicationName: 'fetchtv',
+    applicationName: 'Fetch My Recordings',
     applicationVersion: FETCHTV_VERSION,
     copyright: 'Free and open source under the GPL-3.0-or-later licence.',
-    credits: 'fetchtv is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner.'
+    credits: 'Built on the fetchtv command-line tool. Fetch My Recordings is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner.'
   })
   app.on('second-instance', focusWindow)
   app.on('window-all-closed', () => app.quit())
@@ -55,7 +55,7 @@ const createWindow = () => {
     height: 820,
     minWidth: 640,
     minHeight: 560,
-    title: 'fetchtv',
+    title: 'Fetch My Recordings',
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#0b1117',
@@ -188,7 +188,7 @@ const confirmCloseDuringSave = async ({ event, window }) => {
     buttons: ['Keep saving', 'Stop and close'],
     defaultId: 0,
     cancelId: 0,
-    message: 'fetchtv is still saving recordings.',
+    message: 'Recordings are still saving.',
     detail: 'If you stop now, a recording that is part way keeps what it has. Save the same recordings to the same folder next time to carry on from there.'
   })
   if (response !== 1 || !state.activeSave) return

@@ -120,36 +120,15 @@ body.is-welcome .top {
 }
 
 .mark {
-  --chip: 26px;
-  display: inline-grid;
-  justify-items: center;
-  gap: calc(var(--chip) * 0.12);
+  display: block;
   flex: none;
-}
-
-.mark .chip {
-  display: block;
-  width: var(--chip);
-  height: calc(var(--chip) * 0.24);
-  border-radius: calc(var(--chip) * 0.06);
-}
-
-.mark .chip.blue { background: var(--brand-blue); }
-.mark .chip.orange { background: var(--brand-orange); }
-.mark .chip.yellow { background: var(--brand-yellow); }
-
-.mark .tray {
-  display: block;
-  width: calc(var(--chip) * 1.42);
-  height: calc(var(--chip) * 0.42);
-  margin-top: calc(var(--chip) * 0.06);
-  border: calc(var(--chip) * 0.13) solid var(--primary);
-  border-top: 0;
-  border-radius: 0 0 calc(var(--chip) * 0.16) calc(var(--chip) * 0.16);
+  width: 36px;
+  height: 36px;
 }
 
 .mark.is-large {
-  --chip: 60px;
+  width: 104px;
+  height: 104px;
 }
 
 .steps {
@@ -343,6 +322,7 @@ p {
 
 .bottom {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
