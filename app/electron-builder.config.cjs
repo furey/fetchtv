@@ -10,7 +10,7 @@ module.exports = {
   asar: true,
   electronLanguages: ['en', 'en-GB', 'en_GB'],
   extraMetadata: { version: rootPackage.version, main: 'dist/main.mjs' },
-  artifactName: 'Fetch-My-Recordings-${version}-${os}-${arch}.${ext}',
+  artifactName: 'Fetch-My-Recordings-${os}-${arch}.${ext}',
   publish: null,
   electronFuses: {
     runAsNode: false,
