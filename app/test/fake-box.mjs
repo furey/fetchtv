@@ -213,9 +213,22 @@ const streamBytes = ({ res, item, from, end, bytesPerSecond, finish }) => {
   writeNext()
 }
 
+const PATTERN_PERIOD = 256
+const patternCache = new Map()
+
 const patternBytes = ({ start, end, seed }) => {
-  const buffer = Buffer.allocUnsafe(end - start)
-  for (let index = 0; index < buffer.length; index++) buffer[index] = ((start + index) * 31 + seed) & 0xff
+  const length = end - start
+  const pattern = patternFor({ seed, length: length + PATTERN_PERIOD })
+  const offset = start % PATTERN_PERIOD
+  return pattern.subarray(offset, offset + length)
+}
+
+const patternFor = ({ seed, length }) => {
+  const cached = patternCache.get(seed)
+  if (cached && cached.length >= length) return cached
+  const buffer = Buffer.allocUnsafe(Math.max(length, 1024 * 1024 + PATTERN_PERIOD))
+  for (let index = 0; index < buffer.length; index++) buffer[index] = (index * 31 + seed) & 0xff
+  patternCache.set(seed, buffer)
   return buffer
 }
 
