@@ -4,229 +4,44 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/furey/fetchtv)](https://hub.docker.com/r/furey/fetchtv)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-fetchtv copies the recordings on a Fetch TV box to your computer over your home network, with no Fetch account or cloud login. It comes as a desktop app, Fetch My Recordings, and as a command-line tool that you run in a terminal.
+A Node.js CLI tool to download Fetch TV PVR recordings over the local network.
 
-<https://github.com/user-attachments/assets/092d5692-9651-4589-bddd-f0fc509dda03>
+> [!TIP]<br>
+> Prefer an app with no terminal? [Fetch My Recordings](https://github.com/furey/fetch-my-recordings) is a free desktop app for Mac, Windows, and Linux, built on `fetchtv`.
+
+No Fetch credentials or cloud account required.
+
+Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Python) which is based on [`jinxo13/FetchTV-Helpers`](https://github.com/jinxo13/FetchTV-Helpers) (also Python).
 
 > [!NOTE]<br>
 > Fetch's [Gen 3 Extended Service Levy](https://news.fetchtv.com.au/extended-service-levy-1) applies to Mini Gen 3 and Mighty Gen 3 owners from `1 November 2026`. Copy your recordings while the box still lists them: a box whose Fetch account is cancelled lists no recordings. To record free-to-air TV without Fetch, see [Freetvarr](https://github.com/furey/freetvarr).
 
 ## Contents
 
-- [Desktop app](#desktop-app)
-- [Command line](#command-line)
+- [Demo](#demo)
+- [Quick start](#quick-start)
+- [Installation](#installation)
 - [Usage](#usage)
 - [Save paths](#save-paths)
 - [Examples](#examples)
 - [Interrupted saves](#interrupted-saves)
 - [Moving to Freetvarr or Plex](#moving-to-freetvarr-or-plex)
 - [Programmatic API](#programmatic-api)
-- [Building the desktop app](#building-the-desktop-app)
 - [Tests](#tests)
 - [GitHub workflows](#github-workflows)
 - [Disclaimer](#disclaimer)
 - [Support](#support)
 
-## Desktop app
+## Demo
 
-- [Desktop app overview](#desktop-app-overview)
-- [Download](#download)
-- [First open](#first-open)
-- [First open on a Mac](#first-open-on-a-mac)
-- [First open on Windows](#first-open-on-windows)
-- [First open on Linux](#first-open-on-linux)
-- [Using the app](#using-the-app)
+<https://gist.github.com/user-attachments/assets/61dfab62-a715-4cc3-a4d1-93ee0db43827>
 
-### Desktop app overview
+## Quick start
 
-<img src="https://github.com/furey/fetchtv/releases/download/docs-media/app-icon.png" alt="The Fetch My Recordings app icon: three coloured bars in a mint tray" width="96"/>
+- [Install](#installation) `fetchtv`
+- [Run](#usage) `fetchtv`
 
-Fetch My Recordings is a desktop app for Mac, Windows, and Linux. It finds your Fetch box on your home network and copies the recordings you choose to a folder on your computer. You do not need a terminal or a Fetch account.
-
-Fetch My Recordings is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner.
-
-### Download
-
-Download the file for your computer. Each link gets the newest version.
-
-| Computer                                | Download                                                                                                                                           |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Mac with an Apple chip (M1 or later)    | [`Fetch-My-Recordings-mac-arm64.dmg`](https://github.com/furey/fetchtv/releases/latest/download/Fetch-My-Recordings-mac-arm64.dmg)                 |
-| Mac with an Intel chip                  | [`Fetch-My-Recordings-mac-x64.dmg`](https://github.com/furey/fetchtv/releases/latest/download/Fetch-My-Recordings-mac-x64.dmg)                     |
-| Windows PC                              | [`Fetch-My-Recordings-win-x64.exe`](https://github.com/furey/fetchtv/releases/latest/download/Fetch-My-Recordings-win-x64.exe)                     |
-| Linux computer (Intel or AMD)           | [`Fetch-My-Recordings-linux-x86_64.AppImage`](https://github.com/furey/fetchtv/releases/latest/download/Fetch-My-Recordings-linux-x86_64.AppImage) |
-| Linux computer (ARM, e.g. Raspberry Pi) | [`Fetch-My-Recordings-linux-arm64.AppImage`](https://github.com/furey/fetchtv/releases/latest/download/Fetch-My-Recordings-linux-arm64.AppImage)   |
-
-To check which chip a Mac has, open the Apple menu and choose **About This Mac**. A **Chip** line that says Apple M1, M2, M3, or later means an Apple chip. A **Processor** line that says Intel means an Intel chip.
-
-All versions are on the [releases page](https://github.com/furey/fetchtv/releases).
-
-### First open
-
-Fetch My Recordings is free and open source. Anyone can read its code in the [`app`](./app) folder of this repository. Apple and Microsoft charge every year for the certificate that signs an app, so the app is unsigned. Because of this, your computer shows a warning the first time you open it. The steps below show each warning and the button to press.
-
-The app talks only to the Fetch box on your home network. It reads and writes only the folder you choose and its own settings. It deletes nothing from the Fetch box.
-
-> [!NOTE]<br>
-> The pictures in the steps below are illustrations of the system messages, not screenshots. The wording on your computer can differ a little.
-
-### First open on a Mac
-
-These steps match macOS 15 Sequoia and later, on a Mac with an Apple chip or an Intel chip.
-
-1. Open the `.dmg` file you downloaded.
-2. Drag **Fetch My Recordings** into the **Applications** folder.
-3. Open the **Applications** folder and double-click **Fetch My Recordings**.
-4. A message says "Fetch My Recordings" Not Opened. Click **Done**. Do not click **Move to Trash**.
-
-   <p align="center">
-     <img src="https://github.com/furey/fetchtv/releases/download/docs-media/first-open-mac-not-opened.png" alt="Illustration of the macOS message: Fetch My Recordings Not Opened, Apple could not verify it is free of malware, with the Done button marked" width="600"/>
-     <br/><em>Illustration: the first macOS message</em>
-   </p>
-
-5. Open the Apple menu and choose **System Settings**.
-6. Click **Privacy & Security** in the sidebar.
-7. Scroll down to the **Security** section.
-8. Next to "Fetch My Recordings" was blocked to protect your Mac, click **Open Anyway**.
-
-   <p align="center">
-     <img src="https://github.com/furey/fetchtv/releases/download/docs-media/first-open-mac-privacy-security.png" alt="Illustration of Privacy and Security settings, with the Open Anyway button marked" width="600"/>
-     <br/><em>Illustration: Open Anyway in Privacy &amp; Security</em>
-   </p>
-
-9. Click **Open Anyway** in the next message.
-
-   <p align="center">
-     <img src="https://github.com/furey/fetchtv/releases/download/docs-media/first-open-mac-open-anyway.png" alt="Illustration of the second macOS message, with the Open Anyway button marked" width="600"/>
-     <br/><em>Illustration: the second Open Anyway message</em>
-   </p>
-
-10. Type your Mac login password, or use Touch ID, when your Mac asks.
-11. Wait for the app to open.
-
-The **Open Anyway** button stays for about one hour after you first try to open the app. If it is gone, do steps 3 and 4 again, then continue from step 5.
-
-When the app first searches for your Fetch box, your Mac asks whether Fetch My Recordings can find devices on your local network. Click **Allow**. The app needs this to find your Fetch box.
-
-<p align="center">
-  <img src="https://github.com/furey/fetchtv/releases/download/docs-media/first-open-mac-local-network.png" alt="Illustration of the macOS question about devices on your local network, with the Allow button marked" width="600"/>
-  <br/><em>Illustration: the local network question</em>
-</p>
-
-If you clicked **Don't Allow**, open **System Settings** → **Privacy & Security** → **Local Network**, then turn on **Fetch My Recordings**.
-
-You do these steps once. After that, the app opens with a double-click.
-
-> [!TIP]<br>
-> On macOS 14 Sonoma or earlier, there is a shorter way. Hold the Control key and click **Fetch My Recordings** in the **Applications** folder. Choose **Open**, then click **Open** in the message.
-
-### First open on Windows
-
-1. Double-click the `.exe` file you downloaded.
-2. A blue message says Windows protected your PC. Click **More info**.
-
-   <p align="center">
-     <img src="https://github.com/furey/fetchtv/releases/download/docs-media/first-open-windows-protected.png" alt="Illustration of the blue Windows protected your PC message, with the More info link marked" width="600"/>
-     <br/><em>Illustration: Windows protected your PC</em>
-   </p>
-
-3. Check that the **Publisher** line says Unknown publisher.
-4. Click **Run anyway**.
-
-   <p align="center">
-     <img src="https://github.com/furey/fetchtv/releases/download/docs-media/first-open-windows-run-anyway.png" alt="Illustration of the same message after More info, with the Run anyway button marked" width="600"/>
-     <br/><em>Illustration: the Run anyway button</em>
-   </p>
-
-5. Wait for the app to install and open. It installs for your Windows user only, and it is in the Start menu after that.
-
-The first time the app searches for your Fetch box, Windows Security can ask whether to allow Fetch My Recordings on your networks:
-
-1. Tick **Private networks, such as my home or work network**.
-2. Leave **Public networks** unticked.
-3. Click **Allow access**.
-
-<p align="center">
-  <img src="https://github.com/furey/fetchtv/releases/download/docs-media/first-open-windows-firewall.png" alt="Illustration of the Windows Security Alert for Fetch My Recordings, with Private networks ticked and the Allow access button marked" width="600"/>
-  <br/><em>Illustration: the Windows Security Alert</em>
-</p>
-
-If you click **Cancel**, the app cannot search for the box. You can still type the IP address of your Fetch box (see [Using the app](#using-the-app)).
-
-### First open on Linux
-
-1. Open your file manager and find the `.AppImage` file you downloaded.
-2. Right-click the file and choose **Properties**.
-3. Click the **Permissions** tab.
-4. Turn on **Allow executing file as program**. Newer versions of GNOME Files call it **Executable as Program**. KDE Dolphin calls it **Is executable**.
-
-   <p align="center">
-     <img src="https://github.com/furey/fetchtv/releases/download/docs-media/first-open-linux-allow-executing.png" alt="Illustration of the file Properties window on the Permissions tab, with Allow executing file as program marked" width="600"/>
-     <br/><em>Illustration: Allow executing file as program</em>
-   </p>
-
-5. Close the **Properties** window.
-6. Double-click the file.
-
-To do the same in a terminal, run these commands in the folder with the file:
-
-```console
-chmod +x Fetch-My-Recordings-linux-x86_64.AppImage
-./Fetch-My-Recordings-linux-x86_64.AppImage
-```
-
-If the app does not open on Ubuntu 22.04 or later, install FUSE, which every AppImage needs:
-
-- On Ubuntu 22.04, run `sudo apt install libfuse2`.
-- On Ubuntu 24.04 or later, run `sudo apt install libfuse2t64`.
-
-If the app still does not open on Ubuntu 24.04 or later, start it from a terminal with `--no-sandbox` after the file name. This turns off Electron's sandbox (a limit on what the app's window can do), so use the option only for this app.
-
-### Using the app
-
-Click **Start** on the welcome screen. The app then takes you through these steps:
-
-1. **Find your Fetch box**: the app searches your home network. If it finds no box, check that the box is on and that your computer is on the same home network, then search again. You can also type the box's IP address: four numbers with dots between them, such as `192.168.1.50`. Find it in your router's list of connected devices, or in the network details of the Fetch box's settings menu.
-2. **Choose recordings**: every recording you have not saved before starts ticked. Click **Show** next to a show to tick or untick single episodes. A recording that is still recording cannot be saved until it ends.
-3. **Choose a folder**: the app shows the free space in the folder and the space the recordings need. Turn on **Names for Plex, Jellyfin or Kodi** if you watch recordings in one of those apps. The files are then saved as `Show/Season 01/Show - S01E02.ts`.
-4. **Save**: the app shows the progress of each recording. Your computer stays awake until the save finishes. Click **Stop** at any time.
-
-<p align="center">
-  <img src="https://github.com/furey/fetchtv/releases/download/docs-media/app-welcome.png" alt="The Fetch My Recordings welcome screen with the Start button" width="720"/>
-  <br/><em>The welcome screen</em>
-</p>
-
-The app remembers what it saved from each box. On the **Choose recordings** step, a recording you saved before shows **Saved** and starts unticked. A recording shows **Moved or deleted** when its saved file is no longer where the app put it. That recording starts ticked, so **Save** copies it again.
-
-<p align="center">
-  <img src="https://github.com/furey/fetchtv/releases/download/docs-media/app-choose-recordings.png" alt="The Choose recordings step: one episode marked Saved, one marked Moved or deleted, and one new episode with its size" width="720"/>
-  <br/><em>Choose recordings, with Saved and Moved or deleted episodes</em>
-</p>
-
-When the save ends, the app counts the recordings it saved, the recordings that were already saved, and the recordings it could not save. Click **Open folder** to see the files. The files play in VLC, a free video player, or in a media library app such as Plex, Jellyfin, or Kodi.
-
-<p align="center">
-  <img src="https://github.com/furey/fetchtv/releases/download/docs-media/app-all-done.png" alt="The All done screen: 8 saved, 0 already saved, 0 not saved, with Open folder and Save again buttons" width="720"/>
-  <br/><em>The All done screen</em>
-</p>
-
-If a save stops part way, or some recordings are not saved, click **Save again**. The app skips the recordings that are already in the folder and continues a part-saved recording from where it stopped. The app keeps its list of saved files in a `fetchtv.json` file in the folder, the same file the [command line](#command-line) uses. So the app and the command line can take turns on one folder.
-
-If the app says the box has no recordings, check the TV. A Fetch box whose account is cancelled shows its setup screen on the TV and lists no recordings.
-
-## Command line
-
-- [Command line overview](#command-line-overview)
-- [NPX](#npx)
-- [Node.js from source](#nodejs-from-source)
-- [Docker from Docker Hub](#docker-from-docker-hub)
-- [Docker from source](#docker-from-source)
-
-### Command line overview
-
-The `fetchtv` command does the same work as the [desktop app](#desktop-app) from a terminal, with more options: filters, path templates, JSON output, and Docker. Use it to script saves, or to run them on a server or NAS (network storage drive).
-
-Install it one of these ways:
+## Installation
 
 - [NPX](#npx) (easiest)
 - [Node.js from source](#nodejs-from-source)
@@ -442,7 +257,7 @@ A `--template` can use these variables:
 
 ### Plex layout
 
-The `--for-plex` option saves each episode in the layout that Plex expects and that Freetvarr uses for its own recordings. The desktop app's **Names for Plex, Jellyfin or Kodi** switch uses the same layout.
+The `--for-plex` option saves each episode in the layout that Plex expects and that Freetvarr uses for its own recordings.
 
 ```text
 <show>/Season 01/<show> - S01E02.ts
@@ -687,35 +502,6 @@ Deletion is intentionally not exposed: Fetch TV firmware advertises the standard
 
 The module is safe to `import` — running the CLI requires invoking `fetchtv.js` directly as a script.
 
-## Building the desktop app
-
-The app's source is in the [`app`](./app) folder. It is an [Electron](https://www.electronjs.org) app that calls `fetchtv.js` to find boxes, list recordings, and save them.
-
-```console
-npm ci
-cd app
-npm ci
-npm start
-```
-
-To try the app without a Fetch box, run `npm run fake-box` in the `app` folder in a second terminal. It starts a pretend Fetch box with made-up shows on port `49152`. The pretend box acts like a real one: it overstates each file's size, resets the connection at the end, and answers a resume with `416`. It also answers the app's search, or you can type `127.0.0.1` as the IP address. Add `--empty` for a box with no recordings, or `--mb-per-second=2` for a slow box.
-
-| Command              | Effect                                                                                    |
-| -------------------- | ----------------------------------------------------------------------------------------- |
-| `npm test`           | Runs the unit tests and the end-to-end tests, which drive the app against the pretend box |
-| `npm run dist`       | Builds the app for the computer you run it on, into `app/release`                         |
-| `npm run dist:mac`   | Builds the macOS `.dmg` and `.zip` files (Apple chip and Intel)                           |
-| `npm run dist:win`   | Builds the Windows installer                                                              |
-| `npm run dist:linux` | Builds the Linux AppImages (`x86_64` and `arm64`)                                         |
-
-[`app/scripts/record-demo.mjs`](./app/scripts/record-demo.mjs) records the demo video at the top of this README. It starts a pretend box with demo shows, drives the app, and joins the frames, cursor, and sounds into an MP4 file with `ffmpeg`. Run `npm run bundle` first, then, in the `app` folder:
-
-```console
-node scripts/record-demo.mjs --out /tmp/demo --mp4 /tmp/demo/demo.mp4 --poster /tmp/demo/poster.png
-```
-
-Add `--executable <path>` to record a built app instead of the source.
-
 ## Tests
 
 A feature-level test suite covers every command and code path that doesn't require talking to a real Fetch TV box:
@@ -741,26 +527,22 @@ Tests use Node's built-in `node:test` runner (no external framework) and [`nock`
 | `save-events.test.js`         | `onProgress` / `onResult` events from `saveRecordings`, and stopping a save with an `AbortSignal`: the partial file stays, the lock goes, and the next run resumes                                                                                                                                                                                |
 | `commands.test.js`            | Spawned CLI: `info` / `recordings` / `shows`, prefix-matched commands, `--show` / `--exclude` / `--title`, `--is-recording`, `--json`, `--for-plex`                                                                                                                                                                                               |
 
-The [Desktop App](#desktop-app-builds) workflow runs these tests on every push to `main` or `develop`.
-
 ## GitHub workflows
 
 - [Workflows overview](#workflows-overview)
 - [Publish to NPM](#publish-to-npm)
 - [Publish to Docker Hub](#publish-to-docker-hub)
-- [Desktop app builds](#desktop-app-builds)
 - [Sync Docker Hub description](#sync-docker-hub-description)
 
 ### Workflows overview
 
-GitHub Actions workflows run the tests, publish the packages, and build the desktop app. Two run on release, one keeps the Docker Hub overview in sync, and one tests and builds the desktop app.
+GitHub Actions workflows publish the packages and keep the Docker Hub overview in sync. Two run when a release is created (not for a pre-release), and one runs when `DOCKER_README.md` changes on `main`.
 
-| Workflow                    | File                                                                         | Trigger                                                                                | Effect                                                                                                              |
-| --------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Publish to NPM              | [`publish-npm.yml`](./.github/workflows/publish-npm.yml)                     | `release: created`                                                                     | Publishes [`fetchtv` on NPM](https://www.npmjs.com/package/fetchtv)                                                 |
-| Publish to Docker Hub       | [`publish-docker.yml`](./.github/workflows/publish-docker.yml)               | `release: created`                                                                     | Publishes [`furey/fetchtv` on Docker Hub](https://hub.docker.com/r/furey/fetchtv)                                   |
-| Sync Docker Hub Description | [`dockerhub-description.yml`](./.github/workflows/dockerhub-description.yml) | push to `main` touching `DOCKER_README.md` (or manual)                                 | Pushes `DOCKER_README.md` to the [`furey/fetchtv` Hub overview](https://hub.docker.com/r/furey/fetchtv)             |
-| Desktop App                 | [`desktop-app.yml`](./.github/workflows/desktop-app.yml)                     | push to `main` or `develop`, a version tag, a pull request touching the app, or manual | Tests and builds the desktop app on macOS, Windows, and Linux; attaches the builds to the release for a version tag |
+| Workflow                    | File                                                                         | Trigger                                                | Effect                                                                                                  |
+| --------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Publish to NPM              | [`publish-npm.yml`](./.github/workflows/publish-npm.yml)                     | `release: created`, except pre-releases                | Publishes [`fetchtv` on NPM](https://www.npmjs.com/package/fetchtv)                                     |
+| Publish to Docker Hub       | [`publish-docker.yml`](./.github/workflows/publish-docker.yml)               | `release: created`, except pre-releases                | Publishes [`furey/fetchtv` on Docker Hub](https://hub.docker.com/r/furey/fetchtv)                       |
+| Sync Docker Hub Description | [`dockerhub-description.yml`](./.github/workflows/dockerhub-description.yml) | push to `main` touching `DOCKER_README.md` (or manual) | Pushes `DOCKER_README.md` to the [`furey/fetchtv` Hub overview](https://hub.docker.com/r/furey/fetchtv) |
 
 ### Publish to NPM
 
@@ -769,10 +551,6 @@ Checks out the repo, sets up Node.js 22, runs `npm ci`, then `npm publish` again
 ### Publish to Docker Hub
 
 Builds multi-arch images (`linux/amd64`, `linux/arm64`) via Buildx + QEMU, authenticates with `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`, and pushes tags derived from the release's semver (`{{version}}`, `{{major}}.{{minor}}`, `latest`) to `furey/fetchtv`.
-
-### Desktop app builds
-
-On macOS, Windows, and Ubuntu runners: runs `npm test` (Ubuntu only), runs the desktop app's end-to-end tests against a fake Fetch box (under `xvfb` on Ubuntu), and builds the app with `electron-builder`. The builds are kept as workflow artefacts. For a pushed version tag (e.g. `2.2.0`), a second job waits up to 30 minutes for the GitHub release of that tag, then attaches the `.dmg`, `.zip`, `.exe`, and `.AppImage` files to it. Only that job can write to the repository.
 
 ### Sync Docker Hub description
 
