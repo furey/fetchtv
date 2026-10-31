@@ -45,6 +45,18 @@ const sendHalfThenReset = (res) => {
   res.write(BODY.subarray(0, HALF), () => setTimeout(() => res.socket.destroy(), 20))
 }
 
+const FETCH_BOX_OVERSTATEMENT = 84
+
+const sendAllThenReset = ({ res, statedLength }) => {
+  res.writeHead(200, { 'Content-Length': String(statedLength) })
+  res.write(BODY, () => setTimeout(() => res.socket.destroy(), 20))
+}
+
+const sendRangeNotSatisfiable = (res) => {
+  res.writeHead(416, { 'Content-Range': `bytes */${BODY.length}` })
+  res.end()
+}
+
 const routes = {
   '/full': ({ res, start }) => {
     if (start !== null) return sendRemainder({ res, start })
@@ -61,6 +73,15 @@ const routes = {
     sendHalfThenReset(res)
   },
   '/always-reset': ({ res }) => sendHalfThenReset(res),
+  '/overstate-then-reset': ({ res, start }) => {
+    if (start !== null) return sendRangeNotSatisfiable(res)
+    sendAllThenReset({ res, statedLength: BODY.length + FETCH_BOX_OVERSTATEMENT })
+  },
+  '/range-not-satisfiable': ({ res, start }) => {
+    if (start !== null) return sendRangeNotSatisfiable(res)
+    res.writeHead(200, { 'Content-Length': String(BODY.length) })
+    res.end(BODY)
+  },
 }
 
 const makeRecordings = (items) => [{ title: 'Bluey', items }]
@@ -217,6 +238,32 @@ test('retry: gives up after the configured retries', async () => {
   assert.equal(result[0].status, 'failed')
   assert.equal(result[0].attempts, 3)
   assert.equal(requestsFor('/always-reset').length, 3)
+})
+
+test('fetch box: a body a few bytes shorter than its Content-Length, then a reset, is saved first time', async () => {
+  const item = makeItem({ id: '40', route: '/overstate-then-reset' })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: FAST_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.equal(result[0].attempts, undefined)
+  assert.deepEqual(requestsFor('/overstate-then-reset').map(entry => entry.start), [null])
+  assert.equal(await exists(`${filePathFor(item)}.part`), false)
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+})
+
+test('fetch box: a 416 to the resume of a complete partial file saves it', async () => {
+  const item = makeItem({ id: '41', route: '/range-not-satisfiable', size: BODY.length + FETCH_BOX_OVERSTATEMENT })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(`${filePathFor(item)}.part`, BODY)
+  await writeDb({ [item.id]: { title: item.title, path: savedPathFor(item) } })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.deepEqual(requestsFor('/range-not-satisfiable').map(entry => entry.start), [BODY.length])
+  assert.equal(await exists(`${filePathFor(item)}.part`), false)
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
 })
 
 test('re-run: a failed reset from an earlier run resumes from the partial file', async () => {
