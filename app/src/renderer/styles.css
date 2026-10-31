@@ -1157,3 +1157,32 @@ body.is-welcome main {
   user-select: text;
   overflow-wrap: anywhere;
 }
+
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-2);
+  font-size: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--motion) var(--ease);
+}
+
+.github-link svg {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+
+@media (hover: hover) {
+  .github-link:hover { color: var(--text-1); }
+}
+
+.dialog-body .github-link {
+  font-size: 15px;
+}

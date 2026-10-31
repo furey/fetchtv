@@ -32,7 +32,7 @@ const main = () => {
     applicationName: 'Fetch My Recordings',
     applicationVersion: FETCHTV_VERSION,
     copyright: 'Free and open source under the GPL-3.0-or-later licence.',
-    credits: 'Built on the fetchtv command-line tool. Fetch My Recordings is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner.'
+    credits: 'Built on the fetchtv command-line tool. Fetch My Recordings is an independent, free tool made by a Fetch customer. It is not made, endorsed, or supported by Fetch TV. Fetch is a trademark of its owner. The GitHub mark is from GitHub Octicons, MIT licence, copyright GitHub Inc.'
   })
   app.on('second-instance', focusWindow)
   app.on('window-all-closed', () => app.quit())
