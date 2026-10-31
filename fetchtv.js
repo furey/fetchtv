@@ -48,6 +48,8 @@ const SAVE_FILE_NAME = 'fetchtv.json'
 const MAX_OCTET_RECORDING = 4398046510080
 const FETCH_MANUFACTURER_URL = 'http://www.fetch.com/'
 const SIZE_TOLERANCE = 1024
+const RANGE_NOT_SATISFIABLE = 416
+const RESUME_TIMEOUT = REQUEST_TIMEOUT * 2
 const MIN_CONCURRENT_DOWNLOADS = 1
 const MAX_CONCURRENT_DOWNLOADS = 10
 const DEFAULT_CONCURRENT_DOWNLOADS = 2
@@ -1309,14 +1311,21 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
 
     const response = await httpClient.get(item.url, {
       responseType: 'stream',
-      timeout: REQUEST_TIMEOUT * 20,
+      timeout: isResuming ? RESUME_TIMEOUT : REQUEST_TIMEOUT * 20,
       headers,
       validateStatus: function (status) {
-        return status === 200 || status === 206
+        return status === 200 || status === 206 || (isResuming && status === RANGE_NOT_SATISFIABLE)
       },
     })
 
     responseStream = response.data
+
+    if (response.status === RANGE_NOT_SATISFIABLE) {
+      responseStream.destroy()
+      debug('Box answered the resume of %s with 416: the partial file already holds every byte it serves.', item.title)
+      if (progressBar) progressBar.stop()
+      return await promotePartFile({ item, partFilePath, filePath, lockFilePath, size: existingSize, resumed: true })
+    }
 
     if (response.status === 206) {
       const contentRange = response.headers['content-range']
@@ -1536,6 +1545,12 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
           debug('Response stream error during shutdown for %s: %s', item.title, err.message)
           return
         }
+        if (isPositiveSize(totalLength) && downloadedLength >= totalLength - SIZE_TOLERANCE) {
+          debug('Box closed the connection for %s %d bytes short of its stated size; treating the copy as complete.', item.title, totalLength - downloadedLength)
+          if (progressBar) progressBar.update(progressBar.getTotal(), { pbValue: filesize(downloadedLength, { spacer: 0 }) })
+          if (writer && !writer.writableEnded) writer.end()
+          return
+        }
         hasStreamFailed = true
         const completionPercentage = totalLength > 0 ? Math.min(100, (downloadedLength / totalLength) * 100) : 0
         debug('Response Stream Error Details (%s): Code: %s, Message: %s', item.title, err.code, err.message)
@@ -1578,6 +1593,11 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       })
     })
   } catch (error) {
+    if (isResumeTimeoutAtEnd({ error, isResuming, existingSize, item })) {
+      debug('Resume of %s timed out with the partial file already at the listed size; treating the copy as complete.', item.title)
+      if (progressBar) progressBar.stop()
+      return await promotePartFile({ item, partFilePath, filePath, lockFilePath, size: existingSize, resumed: true })
+    }
     logError(`Failed to initiate download for ${item.title}: ${error.message}`)
     debug('Outer Download Error (%s): %O', item.title, error)
 
@@ -1598,6 +1618,23 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
 
     return { recorded: false, retryable: !error.response, error: `Download initiation failed: ${error.message}` }
   }
+}
+
+const isResumeTimeoutAtEnd = ({ error, isResuming, existingSize, item }) =>
+  isResuming && !error.response && error.code === 'ECONNABORTED' &&
+  isPositiveSize(item.size) && existingSize >= item.size - SIZE_TOLERANCE
+
+const promotePartFile = async ({ item, partFilePath, filePath, lockFilePath, size, resumed }) => {
+  const lockWarning = removeLockFileAfterDownload({ item, lockFilePath })
+  try {
+    await fs.rename(partFilePath, filePath)
+  } catch (renameErr) {
+    logError(`Could not move ${path.basename(partFilePath)} to ${path.basename(filePath)}: ${renameErr.message}`)
+    return { recorded: false, resumed, warning: `Saved, but could not rename the partial file: ${renameErr.message}` }
+  }
+  const result = { recorded: true, resumed, size }
+  if (lockWarning) result.warning = lockWarning
+  return result
 }
 
 const adoptInPlacePartial = async ({ item, filePath, partFilePath }) => {
