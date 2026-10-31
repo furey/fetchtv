@@ -77,6 +77,19 @@ const routes = {
     if (start !== null) return sendRangeNotSatisfiable(res)
     sendAllThenReset({ res, statedLength: BODY.length + FETCH_BOX_OVERSTATEMENT })
   },
+  '/range-not-satisfiable-then-full': ({ res, start }) => {
+    if (start !== null) return sendRangeNotSatisfiable(res)
+    res.writeHead(200, { 'Content-Length': String(BODY.length) })
+    res.end(BODY)
+  },
+  '/range-not-satisfiable-small-total': ({ res, start }) => {
+    if (start !== null) {
+      res.writeHead(416, { 'Content-Range': 'bytes */100' })
+      return res.end()
+    }
+    res.writeHead(200, { 'Content-Length': String(BODY.length) })
+    res.end(BODY)
+  },
   '/range-not-satisfiable': ({ res, start }) => {
     if (start !== null) return sendRangeNotSatisfiable(res)
     res.writeHead(200, { 'Content-Length': String(BODY.length) })
@@ -262,7 +275,36 @@ test('fetch box: a 416 to the resume of a complete partial file saves it', async
 
   assert.equal(result[0].status, 'saved')
   assert.deepEqual(requestsFor('/range-not-satisfiable').map(entry => entry.start), [BODY.length])
+  assert.equal((await readDb())[item.id].size, BODY.length)
   assert.equal(await exists(`${filePathFor(item)}.part`), false)
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+})
+
+test('fetch box: a 416 to the resume of a short partial file discards it and starts again', async () => {
+  const item = makeItem({ id: '43', route: '/range-not-satisfiable-then-full' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(`${filePathFor(item)}.part`, BODY.subarray(0, HALF))
+  await writeDb({ [item.id]: { title: item.title, path: savedPathFor(item) } })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: FAST_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.equal(result[0].attempts, 2)
+  assert.deepEqual(requestsFor('/range-not-satisfiable-then-full').map(entry => entry.start), [HALF, null])
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+  assert.equal((await readDb())[item.id].size, BODY.length)
+})
+
+test('fetch box: a 416 whose total is below the listed size never saves a short partial file', async () => {
+  const item = makeItem({ id: '44', route: '/range-not-satisfiable-small-total' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(`${filePathFor(item)}.part`, BODY.subarray(0, 100))
+  await writeDb({ [item.id]: { title: item.title, path: savedPathFor(item) } })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: FAST_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.deepEqual(requestsFor('/range-not-satisfiable-small-total').map(entry => entry.start), [100, null])
   assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
 })
 

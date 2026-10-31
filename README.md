@@ -393,7 +393,7 @@ A save can stop part way: the network drops, the Fetch box resets the connection
 
 While a recording downloads, `fetchtv` writes it to `<name>.part` beside a `<name>.lock` file. When the size matches what the Fetch box reported, `fetchtv` renames the `.part` file to its final name and removes the lock. Plex and Freetvarr do not read `.part` or `.lock` files, so a half-copied recording does not show up in your library.
 
-The Fetch box often states a size a few bytes bigger than the file it sends, then closes the connection. `fetchtv` counts a copy that ends within `1 KB` of the stated size as complete. If a resume asks for bytes past the end of the file and the box answers that there is nothing left to send (HTTP `416`), `fetchtv` also counts the copy as complete.
+The Fetch box often states a size a few bytes bigger than the file it sends, then closes the connection. `fetchtv` counts a copy that ends within `1 KB` of the stated size as complete. If a resume asks for bytes past the end of the file and the box answers that there is nothing left to send (HTTP `416`), and the partial file is within `1 KB` of the box's size, `fetchtv` also counts the copy as complete. A `416` on a shorter partial file discards it, and the next attempt starts again.
 
 Each recording gets up to two retries in the same run (after `5 s`, then `15 s`) before `fetchtv` moves on. `fetchtv.json` in the save folder records each recording that `fetchtv` started, with its path inside the save folder, and adds the size when the save is complete. A later run uses it to find a file that is missing or short and save it again.
 

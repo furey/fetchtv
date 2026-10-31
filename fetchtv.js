@@ -1322,9 +1322,16 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
 
     if (response.status === RANGE_NOT_SATISFIABLE) {
       responseStream.destroy()
-      debug('Box answered the resume of %s with 416: the partial file already holds every byte it serves.', item.title)
-      if (progressBar) progressBar.stop()
-      return await promotePartFile({ item, partFilePath, filePath, lockFilePath, size: existingSize, resumed: true })
+      if (progressBar) {
+        progressBar.update(progressBar.getTotal())
+        progressBar.stop()
+      }
+      const servedSize = Math.max(rangeNotSatisfiableTotal(response) ?? 0, item.size)
+      if (existingSize >= servedSize - SIZE_TOLERANCE) {
+        debug('Box answered the resume of %s with 416: the partial file already holds every byte it serves.', item.title)
+        return await promotePartFile({ item, partFilePath, filePath, lockFilePath, size: existingSize, resumed: true })
+      }
+      return discardRejectedPartial({ item, partFilePath, lockFilePath, existingSize, servedSize })
     }
 
     if (response.status === 206) {
@@ -1545,7 +1552,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
           debug('Response stream error during shutdown for %s: %s', item.title, err.message)
           return
         }
-        if (isPositiveSize(totalLength) && downloadedLength >= totalLength - SIZE_TOLERANCE) {
+        if (totalLength > SIZE_TOLERANCE && downloadedLength >= totalLength - SIZE_TOLERANCE) {
           debug('Box closed the connection for %s %d bytes short of its stated size; treating the copy as complete.', item.title, totalLength - downloadedLength)
           if (progressBar) progressBar.update(progressBar.getTotal(), { pbValue: filesize(downloadedLength, { spacer: 0 }) })
           if (writer && !writer.writableEnded) writer.end()
@@ -1595,7 +1602,10 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
   } catch (error) {
     if (isResumeTimeoutAtEnd({ error, isResuming, existingSize, item })) {
       debug('Resume of %s timed out with the partial file already at the listed size; treating the copy as complete.', item.title)
-      if (progressBar) progressBar.stop()
+      if (progressBar) {
+        progressBar.update(progressBar.getTotal())
+        progressBar.stop()
+      }
       return await promotePartFile({ item, partFilePath, filePath, lockFilePath, size: existingSize, resumed: true })
     }
     logError(`Failed to initiate download for ${item.title}: ${error.message}`)
@@ -1618,6 +1628,23 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
 
     return { recorded: false, retryable: !error.response, error: `Download initiation failed: ${error.message}` }
   }
+}
+
+const rangeNotSatisfiableTotal = (response) => {
+  const total = parseInt(String(response.headers['content-range'] ?? '').split('/')[1], 10)
+  return isPositiveSize(total) ? total : null
+}
+
+const discardRejectedPartial = ({ item, partFilePath, lockFilePath, existingSize, servedSize }) => {
+  const warning = `The Fetch box rejected the resume of ${item.title} at ${filesize(existingSize, { spacer: '' })} of ${filesize(servedSize, { spacer: '' })}. Partial file discarded; the next attempt starts again.`
+  logWarning(warning)
+  try {
+    fsc.unlinkSync(partFilePath)
+  } catch (unlinkErr) {
+    logWarning(`Could not delete ${path.basename(partFilePath)}: ${unlinkErr.message}`)
+  }
+  removeLockFileAfterDownload({ item, lockFilePath })
+  return { recorded: false, resumed: true, retryable: true, warning }
 }
 
 const isResumeTimeoutAtEnd = ({ error, isResuming, existingSize, item }) =>
