@@ -57,7 +57,7 @@ jobs:
         if: runner.os != 'Linux'
         working-directory: app
         env:
-          FETCHTV_E2E_SKIP_SSDP: ${{ runner.os == 'Windows' && '1' || '' }}
+          FETCHTV_E2E_SKIP_SSDP: ${{ runner.os != 'Linux' && '1' || '' }}
         run: npm test
 
       - name: Test the desktop app (Linux, virtual display)

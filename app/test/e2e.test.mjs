@@ -66,7 +66,7 @@ test('first run: no box found, type the address, choose episodes, save in the de
     await page.getByRole('heading', { name: 'Choose a folder' }).waitFor()
     await stubFolderPicker({ app, folder: saveFolder })
     await page.getByRole('button', { name: 'Change', exact: true }).click()
-    await page.locator(`#folder-path[data-path="${saveFolder}"]`).waitFor()
+    await page.locator(`#folder-path[data-path="${cssString(saveFolder)}"]`).waitFor()
     await page.locator('#folder-info', { hasText: 'Needs' }).waitFor()
     await capture({ app, page, name: '3-folder' })
 
@@ -109,7 +109,7 @@ test('next run: remembers the box and folder, saves in the Plex layout, then ski
     await page.getByText('Nothing selected').waitFor()
     await page.getByRole('button', { name: 'Select all' }).click()
     await page.getByRole('button', { name: 'Next' }).click()
-    await page.locator(`#folder-path[data-path="${saveFolder}"]`).waitFor()
+    await page.locator(`#folder-path[data-path="${cssString(saveFolder)}"]`).waitFor()
     await page.getByRole('switch', { name: 'Names for Plex, Jellyfin or Kodi' }).click()
     const infoButton = page.getByRole('button', { name: 'About names for Plex, Jellyfin or Kodi' })
     await infoButton.click()
@@ -459,3 +459,5 @@ const listFiles = async (folder) => {
 }
 
 const freshDir = async (name) => fs.mkdtemp(path.join(tmpRoot, `${name}-`))
+
+const cssString = (value) => value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
