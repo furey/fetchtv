@@ -20,7 +20,7 @@ const fullIcon = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${siz
 
 const smallIcon = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 64 64">
   <rect width="64" height="64" rx="12" fill="${TILE}"/>
-  <svg x="-2" y="-1" width="68" height="68" viewBox="0 0 64 64">${markInner}</svg></svg>`
+  <svg x="-2" y="-2" width="68" height="68" viewBox="0 0 64 64">${markInner}</svg></svg>`
 
 const iconFor = (size) => (size <= SMALL_ICON_LIMIT ? smallIcon(size) : fullIcon(size))
 
