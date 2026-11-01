@@ -7,7 +7,7 @@
 A Node.js CLI tool to download Fetch TV PVR recordings over the local network.
 
 > [!TIP]<br>
-> Prefer an app with no terminal? [Fetch My Recordings](https://github.com/furey/fetch-my-recordings) is a free desktop app for Mac, Windows, and Linux, built on `fetchtv`.
+> Prefer an app you download and double-click, with no terminal or Node.js? [Fetch My Recordings](https://github.com/furey/fetch-my-recordings) is a free desktop app for Mac, Windows, and Linux, built on `fetchtv`. [Download it for your computer](https://furey.github.io/freetvarr/guide/leaving-fetch#copy-with-the-app).
 
 No Fetch credentials or cloud account required.
 
@@ -29,6 +29,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Programmatic API](#programmatic-api)
 - [Tests](#tests)
 - [GitHub workflows](#github-workflows)
+- [Related projects](#related-projects)
 - [Disclaimer](#disclaimer)
 - [Support](#support)
 
@@ -555,6 +556,11 @@ Builds multi-arch images (`linux/amd64`, `linux/arm64`) via Buildx + QEMU, authe
 ### Sync Docker Hub description
 
 Pushes [`DOCKER_README.md`](./DOCKER_README.md) to the `furey/fetchtv` Docker Hub overview using `peter-evans/dockerhub-description@v4`. Uses the same `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` credentials as the image-publish workflow. Triggers on any push to `main` that touches the README or the workflow file, and can be run manually via `workflow_dispatch`.
+
+## Related projects
+
+- [Fetch My Recordings](https://github.com/furey/fetch-my-recordings): the same copying in a desktop app for Mac, Windows, and Linux. Download, double-click, and choose your recordings; no terminal or Node.js.
+- [Freetvarr](https://furey.github.io/freetvarr/): records free-to-air TV without Fetch, using a TV tuner on your home network, and files it into the same kind of library.
 
 ## Disclaimer
 
