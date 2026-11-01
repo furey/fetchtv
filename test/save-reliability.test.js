@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -18,6 +19,7 @@ const projectRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const cliPath = path.join(projectRoot, 'fetchtv.js')
 
 const BODY = Buffer.alloc(64 * 1024, 'abcdefghij')
+const LARGE_BODY = Buffer.alloc(2 * 1024 * 1024 + 4096, 'klmnopqrst')
 const HALF = BODY.length / 2
 const NO_RETRIES = []
 const FAST_RETRIES = [10, 10]
@@ -47,9 +49,9 @@ const sendHalfThenReset = (res) => {
 
 const FETCH_BOX_OVERSTATEMENT = 84
 
-const sendAllThenReset = ({ res, statedLength }) => {
+const sendAllThenReset = ({ res, statedLength, body = BODY }) => {
   res.writeHead(200, { 'Content-Length': String(statedLength) })
-  res.write(BODY, () => setTimeout(() => res.socket.destroy(), 20))
+  res.write(body, () => setTimeout(() => res.socket.destroy(), 20))
 }
 
 const sendRangeNotSatisfiable = (res) => {
@@ -76,6 +78,10 @@ const routes = {
   '/overstate-then-reset': ({ res, start }) => {
     if (start !== null) return sendRangeNotSatisfiable(res)
     sendAllThenReset({ res, statedLength: BODY.length + FETCH_BOX_OVERSTATEMENT })
+  },
+  '/large-overstate-then-reset': ({ res, start }) => {
+    if (start !== null) return sendRangeNotSatisfiable(res)
+    sendAllThenReset({ res, statedLength: LARGE_BODY.length + FETCH_BOX_OVERSTATEMENT, body: LARGE_BODY })
   },
   '/range-not-satisfiable-then-full': ({ res, start }) => {
     if (start !== null) return sendRangeNotSatisfiable(res)
@@ -132,6 +138,15 @@ const savedPathFor = (item) => `Bluey/${item.title}.ts`
 const exists = (filePath) => fs.access(filePath).then(() => true, () => false)
 
 const requestsFor = (route) => requestLog.filter(entry => entry.route === route)
+
+const slowDownFileWrites = (t) => {
+  const delayed = (original) => function (...args) {
+    const callback = args.pop()
+    return original.call(this, ...args, (...results) => setTimeout(() => callback(...results), 5))
+  }
+  t.mock.method(fsSync, 'write', delayed(fsSync.write))
+  t.mock.method(fsSync, 'writev', delayed(fsSync.writev))
+}
 
 const silenceConsole = async (fn) => {
   const lines = []
@@ -263,6 +278,16 @@ test('fetch box: a body a few bytes shorter than its Content-Length, then a rese
   assert.deepEqual(requestsFor('/overstate-then-reset').map(entry => entry.start), [null])
   assert.equal(await exists(`${filePathFor(item)}.part`), false)
   assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+})
+
+test('fetch box: a slow disk keeps the last bytes the box sends before its reset', async (t) => {
+  slowDownFileWrites(t)
+  const item = makeItem({ id: '42', route: '/large-overstate-then-reset', size: LARGE_BODY.length + FETCH_BOX_OVERSTATEMENT })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'saved', result[0].warning)
+  assert.ok((await fs.readFile(filePathFor(item))).equals(LARGE_BODY))
 })
 
 test('fetch box: a 416 to the resume of a complete partial file saves it', async () => {
