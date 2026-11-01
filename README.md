@@ -7,7 +7,7 @@
 A Node.js CLI tool to download Fetch TV PVR recordings over the local network.
 
 > [!TIP]<br>
-> Prefer an app you download and double-click, with no terminal or Node.js? [Fetch My Recordings](https://github.com/furey/fetch-my-recordings) is a free desktop app for Mac, Windows, and Linux, built on `fetchtv`. [Download it for your computer](https://furey.github.io/freetvarr/guide/leaving-fetch#copy-with-the-app).
+> Prefer an app you download and double-click, with no terminal or Node.js? [Fetch My Recordings](https://github.com/furey/fetch-my-recordings) is a free desktop app for Mac, Windows, and Linux, built on `fetchtv`. [Download it for your computer](https://furey.github.io/freetvarr/guide/leaving-fetch#save-via-desktop-app).
 
 No Fetch credentials or cloud account required.
 
