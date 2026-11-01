@@ -50,6 +50,7 @@ const FETCH_MANUFACTURER_URL = 'http://www.fetch.com/'
 const SIZE_TOLERANCE = 1024
 const RANGE_NOT_SATISFIABLE = 416
 const RESUME_TIMEOUT = REQUEST_TIMEOUT * 2
+const UNPAUSED_TAIL_BYTES = 32 * 1024 * 1024
 const MIN_CONCURRENT_DOWNLOADS = 1
 const MAX_CONCURRENT_DOWNLOADS = 10
 const DEFAULT_CONCURRENT_DOWNLOADS = 2
@@ -1540,7 +1541,8 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, si
       }
     })
 
-    responseStream.pipe(writer)
+    const expectedLength = Math.max(totalLength, isPositiveSize(item.size) ? item.size : 0)
+    copyKeepingTheTail({ responseStream, writer, bytesLeft: () => (expectedLength > 0 ? expectedLength - downloadedLength : Infinity) })
 
     return new Promise((resolve, reject) => {
       writer.on('finish', async () => {
@@ -1720,6 +1722,23 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, si
     return { recorded: false, retryable: !error.response, error: `Download initiation failed: ${error.message}` }
   }
 }
+
+const copyKeepingTheTail = ({ responseStream, writer, bytesLeft }) => {
+  let isWaitingForDrain = false
+  responseStream.on('data', (chunk) => {
+    const hasRoom = writer.write(chunk)
+    if (hasRoom || isWaitingForDrain || !isFarFromTheEnd(bytesLeft())) return
+    isWaitingForDrain = true
+    responseStream.pause()
+    writer.once('drain', () => {
+      isWaitingForDrain = false
+      responseStream.resume()
+    })
+  })
+  responseStream.once('end', () => writer.end())
+}
+
+const isFarFromTheEnd = (bytesLeft) => bytesLeft > UNPAUSED_TAIL_BYTES
 
 const untilResponse = async ({ signal }, request) => {
   if (!signal) return request(undefined)
