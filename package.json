@@ -1,6 +1,6 @@
 {
   "name": "fetchtv",
-  "version": "2.1.2",
+  "version": "2.2.0",
   "author": "James Furey (https://about.me/jamesfurey)",
   "description": "A Node.js CLI tool to manage Fetch TV recordings.",
   "license": "GPL-3.0-or-later",
@@ -9,6 +9,9 @@
   "bin": {
     "fetchtv": "fetchtv.js"
   },
+  "files": [
+    "fetchtv.js"
+  ],
   "scripts": {
     "start": "node fetchtv.js",
     "test": "node --test 'test/*.test.js'"

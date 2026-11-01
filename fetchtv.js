@@ -68,7 +68,8 @@ const SAVE_STATUS = {
   ALREADY_SAVED: 'already_saved',
   STILL_RECORDING: 'still_recording',
   LOCKED: 'locked',
-  FAILED: 'failed'
+  FAILED: 'failed',
+  CANCELLED: 'cancelled'
 }
 
 const httpClient = axios.create({
@@ -251,8 +252,8 @@ const discoverFetch = async ({ ip, port }) => {
   return fetchServer
 }
 
-const getFetchRecordings = async ({ location, filters }) => {
-  const { folderFilter, excludeFilter, titleFilter, showsOnly, isRecordingFilter } = filters
+const getFetchRecordings = async ({ location, filters = {}, onProgress }) => {
+  const { folderFilter = [], excludeFilter = [], titleFilter = [], showsOnly = false, isRecordingFilter = false } = filters
 
   const apiService = await getApiService(location)
   if (!apiService) {
@@ -299,14 +300,7 @@ const getFetchRecordings = async ({ location, filters }) => {
   const totalShows = filteredShows.length
   let processedShows = 0
 
-  progressBarActive = true
-  const progressBar = new cliProgress.SingleBar({
-    format: `Processing |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} Shows`,
-    barCompleteChar: '\u2588',
-    barIncompleteChar: '\u2591'
-  }, cliProgress.Presets.shades_classic)
-
-  progressBar.start(totalShows, 0)
+  const progressBar = createShowProgress({ totalShows, onProgress })
 
   const batchSize = 5
   const results = []
@@ -343,9 +337,34 @@ const getFetchRecordings = async ({ location, filters }) => {
   }
 
   progressBar.stop()
-  progressBarActive = false
 
   return results
+}
+
+const createShowProgress = ({ totalShows, onProgress }) => {
+  if (onProgress) {
+    onProgress({ done: 0, total: totalShows })
+    return {
+      update: (done) => onProgress({ done, total: totalShows }),
+      stop: () => {}
+    }
+  }
+
+  progressBarActive = true
+  const progressBar = new cliProgress.SingleBar({
+    format: `Processing |${chalk.cyan('{bar}')}| {percentage}% | {value}/{total} Shows`,
+    barCompleteChar: '\u2588',
+    barIncompleteChar: '\u2591'
+  }, cliProgress.Presets.shades_classic)
+  progressBar.start(totalShows, 0)
+
+  return {
+    update: (done) => progressBar.update(done),
+    stop: () => {
+      progressBar.stop()
+      progressBarActive = false
+    }
+  }
 }
 
 const plexFilePath = async ({ savePath, showFolder, templateData, listFoldersOf }) => {
@@ -414,7 +433,10 @@ const saveRecordings = async ({
   forPlex = false,
   overwrite,
   concurrency = DEFAULT_CONCURRENT_DOWNLOADS,
-  retryDelays = DOWNLOAD_RETRY_DELAYS
+  retryDelays = DOWNLOAD_RETRY_DELAYS,
+  onProgress,
+  onResult,
+  signal
 }) => {
   const savedFilesDb = await loadSavedFiles(savePath)
   const listFoldersOf = createFolderLister()
@@ -422,6 +444,10 @@ const saveRecordings = async ({
   const claimedPaths = new Set()
   const jsonResults = []
   const tasks = []
+  const addResult = (result) => {
+    jsonResults.push(result)
+    if (onResult) onResult(result)
+  }
 
   for (const show of recordings) {
     if (!show.items || show.items.length === 0) continue
@@ -498,7 +524,7 @@ const saveRecordings = async ({
 
       if (lockStillExistsAfterCheck) {
         log(chalk.gray(`Skipping ${item.title} (lock file exists or failed to remove stale lock).`))
-        jsonResults.push({
+        addResult({
           item: formatItem(item),
           recorded: false,
           status: SAVE_STATUS.LOCKED,
@@ -512,7 +538,7 @@ const saveRecordings = async ({
         const isComplete = await isSavedFileComplete({ filePath, savedEntry, item })
         if (isComplete) {
           log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
-          jsonResults.push({
+          addResult({
             item: formatItem(item),
             recorded: false,
             status: SAVE_STATUS.ALREADY_SAVED,
@@ -534,22 +560,20 @@ const saveRecordings = async ({
 
   log(`Saving ${tasks.length} recording${tasks.length > 1 ? 's' : ''}…`)
 
-  progressBarActive = true
-  const multiBar = new cliProgress.MultiBar({
-    clearOnComplete: false,
-    hideCursor: true,
-    format: ' {bar} | {percentage}% | {filename}'
-  }, cliProgress.Presets.shades_classic)
-
-  activeMultiBar = multiBar
+  const multiBar = onProgress ? null : createSaveMultiBar()
   const activePromises = new Set()
 
   for (const task of tasks) {
+    if (signal?.aborted) {
+      addResult(cancelledResult(task.item))
+      continue
+    }
+
     try {
       await fs.mkdir(path.dirname(task.filePath), { recursive: true })
     } catch (mkdirErr) {
       logError(`Failed to create directory for ${task.item.title}: ${mkdirErr.message}`)
-      jsonResults.push({
+      addResult({
         item: formatItem(task.item),
         recorded: false,
         status: SAVE_STATUS.FAILED,
@@ -562,21 +586,20 @@ const saveRecordings = async ({
       await Promise.race(activePromises)
     }
 
-    const progressBar = multiBar.create(task.item.size || 1, 0, {
-      filename: chalk.whiteBright(path.basename(task.filePath).slice(0, 30).padEnd(30)),
-      speed: 'N/A',
-      pbETA: 'N/A',
-      pbValue: filesize(0, { spacer: '' }),
-      pbTotal: filesize(task.item.size || 0, { spacer: '' })
-    })
+    if (signal?.aborted) {
+      addResult(cancelledResult(task.item))
+      continue
+    }
 
-    progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {pbValue}/{pbTotal} | {speed}/s | ETA: {pbETA}`
+    const progressBar = multiBar
+      ? createCliProgressBar({ multiBar, task })
+      : createReportingBar({ task, onProgress })
 
     if (isPositiveSize(task.item.size)) {
       await recordSaveStart({ savePath, savedFilesDb, item: task.item, filePath: task.filePath })
     }
 
-    const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays })
+    const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays, signal })
       .then(async (downloadResult) => {
         const resultEntry = {
           item: formatItem(task.item),
@@ -588,7 +611,7 @@ const saveRecordings = async ({
         if (downloadResult.attempts > 1) resultEntry.attempts = downloadResult.attempts
         if (downloadResult.warning) resultEntry.warning = downloadResult.warning
         if (downloadResult.error) resultEntry.error = downloadResult.error
-        jsonResults.push(resultEntry)
+        addResult(resultEntry)
 
         if (downloadResult.recorded) {
           await addSavedFile({ savePath, savedFilesDb, item: task.item, size: downloadResult.size, filePath: task.filePath })
@@ -596,7 +619,7 @@ const saveRecordings = async ({
       })
       .catch((error) => {
         logError(`Unexpected error processing save result for ${task.item.title}: ${error.message}`)
-        jsonResults.push({
+        addResult({
           item: formatItem(task.item),
           recorded: false,
           status: SAVE_STATUS.FAILED,
@@ -622,12 +645,12 @@ const saveRecordings = async ({
     activePromises.add(promise)
   }
 
-  registerExitHandlers()
+  if (!signal) registerExitHandlers()
 
   try {
     await Promise.allSettled(activePromises)
   } finally {
-    if (!isShuttingDown && activeMultiBar) {
+    if (!isShuttingDown && multiBar && activeMultiBar) {
       multiBar.stop()
       activeMultiBar = null
       progressBarActive = false
@@ -637,24 +660,85 @@ const saveRecordings = async ({
   return jsonResults
 }
 
-const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite, retryDelays = DOWNLOAD_RETRY_DELAYS }) => {
+const createSaveMultiBar = () => {
+  progressBarActive = true
+  activeMultiBar = new cliProgress.MultiBar({
+    clearOnComplete: false,
+    hideCursor: true,
+    format: ' {bar} | {percentage}% | {filename}'
+  }, cliProgress.Presets.shades_classic)
+  return activeMultiBar
+}
+
+const createCliProgressBar = ({ multiBar, task }) => {
+  const progressBar = multiBar.create(task.item.size || 1, 0, {
+    filename: chalk.whiteBright(path.basename(task.filePath).slice(0, 30).padEnd(30)),
+    speed: 'N/A',
+    pbETA: 'N/A',
+    pbValue: filesize(0, { spacer: '' }),
+    pbTotal: filesize(task.item.size || 0, { spacer: '' })
+  })
+  progressBar.options.format = `{filename} |${chalk.cyan('{bar}')}| {percentage}% | {pbValue}/{pbTotal} | {speed}/s | ETA: {pbETA}`
+  return progressBar
+}
+
+const createReportingBar = ({ task, onProgress }) => {
+  let total = task.item.size || 1
+  let bytes = 0
+  const report = () => onProgress({ id: task.item.id, filePath: task.filePath, bytes, total })
+  report()
+  return {
+    startTime: Date.now(),
+    getTotal: () => total,
+    setTotal: (newTotal) => {
+      total = newTotal
+      report()
+    },
+    update: (newBytes) => {
+      bytes = newBytes
+      report()
+    },
+    stop: () => {}
+  }
+}
+
+const cancelledResult = (item) => ({
+  item: formatItem(item),
+  recorded: false,
+  status: SAVE_STATUS.CANCELLED,
+  warning: 'Stopped before this recording started.'
+})
+
+const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite, retryDelays = DOWNLOAD_RETRY_DELAYS, signal }) => {
   const maxAttempts = retryDelays.length + 1
-  let result = await downloadFile({ item, filePath, progressBar, overwrite })
+  let result = await downloadFile({ item, filePath, progressBar, overwrite, signal })
   let attempts = 1
 
-  while (result.retryable && attempts < maxAttempts && !isShuttingDown) {
+  while (result.retryable && attempts < maxAttempts && !isShuttingDown && !signal?.aborted) {
     const delay = retryDelays[attempts - 1]
     attempts++
     log(chalk.yellow(`Retrying ${item.title} in ${formatSeconds(delay)} (attempt ${attempts} of ${maxAttempts})…`))
-    await new Promise(resolve => setTimeout(resolve, delay))
-    result = await downloadFile({ item, filePath, progressBar, overwrite: false })
+    await waitUnlessAborted({ delay, signal })
+    if (signal?.aborted) return { ...result, retryable: false, cancelled: true, attempts }
+    result = await downloadFile({ item, filePath, progressBar, overwrite: false, signal })
   }
 
   return { ...result, attempts }
 }
 
+const waitUnlessAborted = ({ delay, signal }) => new Promise(resolve => {
+  const finish = () => {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', finish)
+    resolve()
+  }
+  const timer = setTimeout(finish, delay)
+  signal?.addEventListener('abort', finish, { once: true })
+})
+
 const getDownloadStatus = (downloadResult) => {
   if (downloadResult.recorded) return SAVE_STATUS.SAVED
+  if (downloadResult.cancelled) return SAVE_STATUS.CANCELLED
   if (downloadResult.stillRecording) return SAVE_STATUS.STILL_RECORDING
   if (downloadResult.locked) return SAVE_STATUS.LOCKED
   return SAVE_STATUS.FAILED
@@ -1238,7 +1322,7 @@ const isCurrentlyRecording = async (item) => {
   }
 }
 
-const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) => {
+const downloadFile = async ({ item, filePath, progressBar, overwrite = false, signal }) => {
   // Refuse to download items whose UPnP listing reports a non-positive size
   // (Fetch TV's "-1" sentinel for in-progress recordings) — the stream would
   // serve truncated bytes and we'd silently end up with an incomplete file.
@@ -1246,6 +1330,8 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
     logWarning(`Skipping ${item.title}, size is non-positive (${item.size}), likely still recording.`)
     return { recorded: false, stillRecording: true, warning: `Skipping item, size ${item.size} indicates it's currently recording` }
   }
+
+  if (signal?.aborted) return { recorded: false, cancelled: true, warning: 'Stopped before this recording started.' }
 
   const lockFilePath = `${filePath}${CONST_LOCK}`
   const partFilePath = `${filePath}${PART_SUFFIX}`
@@ -1309,14 +1395,15 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       debug('Adding Range header: %s', headers.Range)
     }
 
-    const response = await httpClient.get(item.url, {
+    const response = await untilResponse({ signal }, (requestSignal) => httpClient.get(item.url, {
       responseType: 'stream',
       timeout: isResuming ? RESUME_TIMEOUT : REQUEST_TIMEOUT * 20,
       headers,
+      signal: requestSignal,
       validateStatus: function (status) {
         return status === 200 || status === 206 || (isResuming && status === RANGE_NOT_SATISFIABLE)
       },
-    })
+    }))
 
     responseStream = response.data
 
@@ -1567,13 +1654,14 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
           progressBar.stop()
         }
 
-        const interruptedWarning = describeInterruption({ item, err, completionPercentage })
-        const interruptedResult = {
-          recorded: false,
-          resumed: isResuming,
-          retryable: true,
-          warning: `${interruptedWarning} Partial file kept for resume.`
-        }
+        const interruptedResult = signal?.aborted
+          ? { recorded: false, resumed: isResuming, cancelled: true, warning: 'Stopped. Partial file kept for resume.' }
+          : {
+            recorded: false,
+            resumed: isResuming,
+            retryable: true,
+            warning: `${describeInterruption({ item, err, completionPercentage })} Partial file kept for resume.`
+          }
 
         const finishInterrupted = () => {
           removeLockFileAfterDownload({ item, lockFilePath })
@@ -1598,6 +1686,8 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
         }
         debug('Response stream ended for %s.', item.title)
       })
+
+      stopStreamOnAbort({ signal, responseStream })
     })
   } catch (error) {
     if (isResumeTimeoutAtEnd({ error, isResuming, existingSize, item })) {
@@ -1626,8 +1716,34 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false }) 
       logWarning(`Could not clean up lock file in outer catch block: ${cleanupErr.message}`)
     }
 
+    if (signal?.aborted) return { recorded: false, cancelled: true, warning: 'Stopped before this recording started.' }
     return { recorded: false, retryable: !error.response, error: `Download initiation failed: ${error.message}` }
   }
+}
+
+const untilResponse = async ({ signal }, request) => {
+  if (!signal) return request(undefined)
+  const requestController = new AbortController()
+  const abortRequest = () => requestController.abort()
+  if (signal.aborted) abortRequest()
+  signal.addEventListener('abort', abortRequest, { once: true })
+  try {
+    return await request(requestController.signal)
+  } finally {
+    signal.removeEventListener('abort', abortRequest)
+  }
+}
+
+const stopStreamOnAbort = ({ signal, responseStream }) => {
+  if (!signal) return
+  const stop = () => {
+    if (responseStream.destroyed) return
+    responseStream.unpipe()
+    responseStream.destroy(new Error('Save stopped'))
+  }
+  if (signal.aborted) return stop()
+  signal.addEventListener('abort', stop, { once: true })
+  responseStream.once('close', () => signal.removeEventListener('abort', stop))
 }
 
 const rangeNotSatisfiableTotal = (response) => {
@@ -2078,6 +2194,7 @@ export {
   findDirectories,
   browseRequest,
   isLockFileStale,
+  syncCleanupLockFiles,
   loadSavedFiles,
   addSavedFile,
   createRequestManager,
