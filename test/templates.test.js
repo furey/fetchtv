@@ -92,3 +92,44 @@ test('processPathTemplate: replaces ".." runs with "_" to neutralize traversal',
   })
   assert.match(result, /foo_bar/)
 })
+
+test('processPathTemplate: strips trailing dots from folder names', () => {
+  const result = processPathTemplate({
+    templateString: '${show_title}/${recording_title}.${ext}',
+    data: { ...baseData, show_title: 'Trailing Dots...' },
+  })
+  assert.equal(result, path.join('Trailing Dots', 'S1 E2 - Hospital.ts'))
+})
+
+test('processPathTemplate: suffixes a Windows device name in a folder or file name', () => {
+  const result = processPathTemplate({
+    templateString: '${show_title}/${recording_title}.${ext}',
+    data: { ...baseData, show_title: 'AUX', recording_title: 'con' },
+  })
+  assert.equal(result, path.join('AUX_', 'con_.ts'))
+})
+
+test('processPathTemplate: caps a long file name and keeps the extension', () => {
+  const result = processPathTemplate({
+    templateString: '${show_title} - ${recording_title}.${ext}',
+    data: { ...baseData, show_title: 'a'.repeat(100), recording_title: 'b'.repeat(100) },
+  })
+  assert.equal(result, `${'a'.repeat(100)} - ${'b'.repeat(17)}.ts`)
+})
+
+test('processPathTemplate: keeps the spacing of a folder named in the template', () => {
+  const result = processPathTemplate({
+    templateString: 'My  Shows/${show_title}/${recording_title}.${ext}',
+    data: baseData,
+  })
+  assert.equal(result, path.join('My  Shows', 'Bluey', 'S1 E2 - Hospital.ts'))
+})
+
+test('processPathTemplate: a blank show title gives a "_" folder, not an empty one', () => {
+  const result = processPathTemplate({
+    templateString: '${show_title}/${recording_title}.${ext}',
+    data: { ...baseData, show_title: '   ' },
+  })
+  assert.equal(result, path.join('_', 'S1 E2 - Hospital.ts'))
+  assert.ok(result.split(path.sep).every(Boolean))
+})
