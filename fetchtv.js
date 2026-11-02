@@ -81,7 +81,8 @@ const LISTING_OUTCOME = Object.freeze({
   NO_CONTENT_DIRECTORY: 'no-content-directory',
   BROWSE_FAILED: 'browse-failed',
   NO_RECORDINGS_FOLDER: 'no-recordings-folder',
-  RECORDINGS_BROWSE_FAILED: 'recordings-browse-failed'
+  RECORDINGS_BROWSE_FAILED: 'recordings-browse-failed',
+  ITEMS_BROWSE_FAILED: 'items-browse-failed'
 })
 
 const LISTING_OUTCOME_HINTS = {
@@ -89,6 +90,7 @@ const LISTING_OUTCOME_HINTS = {
   [LISTING_OUTCOME.BROWSE_FAILED]: 'The box did not answer the request for its folders. Restart the box and try again.',
   [LISTING_OUTCOME.NO_RECORDINGS_FOLDER]: 'The box lists no Recordings folder. A Fetch box that has lost its Fetch service (account cancelled or suspended, or no internet) shows its setup screen on the TV and lists no recordings until that is fixed.',
   [LISTING_OUTCOME.RECORDINGS_BROWSE_FAILED]: 'The box did not answer the request for its Recordings folder. Restart the box and try again.',
+  [LISTING_OUTCOME.ITEMS_BROWSE_FAILED]: 'The box listed its shows but did not answer the requests for their recordings. Restart the box and try again.',
   [LISTING_OUTCOME.EMPTY]: 'The box answered, and its Recordings folder is empty.'
 }
 
@@ -315,7 +317,10 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
     return []
   }
 
-  onOutcome({ outcome: showFolders.length === 0 ? LISTING_OUTCOME.EMPTY : LISTING_OUTCOME.OK })
+  if (showFolders.length === 0) {
+    onOutcome({ outcome: LISTING_OUTCOME.EMPTY })
+    return []
+  }
 
   const filteredShows = showFolders.filter(show => {
     const titleLower = show.title.toLowerCase()
@@ -324,8 +329,10 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
     return include && !exclude
   })
 
-  if (showsOnly || filteredShows.length === 0)
+  if (showsOnly || filteredShows.length === 0) {
+    onOutcome({ outcome: LISTING_OUTCOME.OK })
     return filteredShows.map(show => ({ ...show, items: [] }))
+  }
 
   const totalShows = filteredShows.length
   let processedShows = 0
@@ -334,11 +341,12 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
 
   const batchSize = 5
   const results = []
+  const itemsErrors = []
 
   for (let i = 0; i < filteredShows.length; i += batchSize) {
     const batch = filteredShows.slice(i, i + batchSize)
     const batchPromises = batch.map(async show => {
-      let items = await requestManager.enqueue(() => findItems({ apiService, objectId: show.id, showTitle: show.title }))
+      let items = await requestManager.enqueue(() => findItems({ apiService, objectId: show.id, showTitle: show.title, onFailure: (error) => { itemsErrors.push(error) } }))
 
       if (titleFilter.length > 0)
         items = items.filter(item => titleFilter.some(t => item.title.toLowerCase().includes(t)))
@@ -368,6 +376,12 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
 
   progressBar.stop()
 
+  if (itemsErrors.length === totalShows) {
+    onOutcome({ outcome: LISTING_OUTCOME.ITEMS_BROWSE_FAILED, error: itemsErrors.at(-1)?.message })
+    return results
+  }
+
+  onOutcome({ outcome: LISTING_OUTCOME.OK })
   return results
 }
 
@@ -1248,8 +1262,8 @@ const findDirectories = async ({ apiService, objectId = '0', onFailure }) => {
   })).filter(c => c.id && c.title)
 }
 
-const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show' }) => {
-  const didlLite = await browseRequest({ apiService, objectId })
+const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show', onFailure }) => {
+  const didlLite = await browseRequest({ apiService, objectId, onFailure })
   if (!didlLite) return []
   if (!didlLite.item) return []
 
