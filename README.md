@@ -440,13 +440,13 @@ Points to check:
 
 - **Play them as they are**: VLC (a free video player), Plex, Jellyfin, and Kodi play `.ts` files. On an Apple TV, iPhone, or iPad, use the Infuse or VLC app.
 - **HandBrake**: a free app with buttons, from [handbrake.fr](https://handbrake.fr). Choose the **Fast 1080p30** preset for an HD recording, or **Fast 576p25** for an SD recording. It does a full convert (a new picture and new sound), which takes several minutes to an hour or more for each hour of recording.
-- **ffmpeg**: a free command-line tool. A fast copy puts an hour of HD into an MP4 file in under a minute, with no loss of quality:
+- **ffmpeg**: a free command-line tool. A fast copy puts an hour of HD into an MP4 file in under a minute from a local drive (longer over Wi-Fi to a NAS), with no loss of quality. The result plays in QuickTime Player on a Mac:
 
   ```sh
   ffmpeg -fflags +genpts -i "Show - S01E02.ts" -map 0:v:0 -map 0:a -c copy -sn -dn -ignore_unknown -movflags +faststart "Show - S01E02.mp4"
   ```
 
-The Freetvarr guide's [Converting recordings to MP4](https://furey.github.io/freetvarr/guide/leaving-fetch#converting-recordings-to-mp4) has the full steps: how to install ffmpeg on a Mac, Windows, or Linux, a full convert for SD recordings and Apple devices, and commands that convert a whole folder at once.
+The Freetvarr guide's [Converting recordings to MP4](https://furey.github.io/freetvarr/guide/leaving-fetch#converting-recordings-to-mp4) has the full steps: how to install ffmpeg on a Mac, Windows, or Linux, a full convert for files that a fast copy cannot play (such as SD channels, or recordings with an extra sound track), and commands that convert a whole folder at once.
 
 > [!WARNING]<br>
 > Download video software only from the official sites: VLC from [videolan.org](https://www.videolan.org), HandBrake from [handbrake.fr](https://handbrake.fr), and ffmpeg through Homebrew, `winget`, or your Linux package manager. Search ads and look-alike sites offer "free video converters" that can come with unwanted software or malware.
