@@ -97,3 +97,19 @@ test('listing outcome: a box with recordings', async () => {
   assert.ok(shows.length > 0)
   assert.deepEqual(outcomes, [{ outcome: 'ok' }])
 })
+
+test('listing outcome: every show browse fails after retries', async () => {
+  serveBrowse({ 0: 'browse-root.xml', 1: 'browse-recordings.xml', 10: 500, 11: 500, 12: 500 })
+  const { shows, outcomes } = await listWithOutcome()
+  assert.deepEqual(shows, [])
+  assert.equal(outcomes.length, 1)
+  assert.equal(outcomes[0].outcome, 'items-browse-failed')
+  assert.match(outcomes[0].error, /500/)
+})
+
+test('listing outcome: some show browses fail, the rest still list', async () => {
+  serveBrowse({ 0: 'browse-root.xml', 1: 'browse-recordings.xml', 10: 'browse-show-items.xml', 11: 500, 12: 'browse-show-items.xml' })
+  const { shows, outcomes } = await listWithOutcome()
+  assert.deepEqual(shows.map(show => show.id), [10, 12])
+  assert.deepEqual(outcomes, [{ outcome: 'ok' }])
+})
