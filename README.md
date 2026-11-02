@@ -26,6 +26,7 @@ Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Pyth
 - [Examples](#examples)
 - [Interrupted saves](#interrupted-saves)
 - [Moving to Freetvarr or Plex](#moving-to-freetvarr-or-plex)
+- [Convert to MP4](#convert-to-mp4)
 - [Programmatic API](#programmatic-api)
 - [Tests](#tests)
 - [GitHub workflows](#github-workflows)
@@ -432,6 +433,23 @@ Points to check:
 - **Default layout**: without `--for-plex`, episodes go straight into the show folder with Fetch's own titles (e.g. `The Block/S22 E34 - Kids Room and Re-Do Room Week - Tue 29 Sep.ts`). Plex reads these, but Freetvarr only looks for replacement files inside season folders, so use `--for-plex` for a Freetvarr library.
 - **File owner**: Freetvarr can only rename, edit, or delete files that its user can write. Saving over a network share (SMB) from a Mac or PC gives the files the share user's ownership, which is usually correct. With Docker, run the container as the Freetvarr user (`PUID` and `PGID`), e.g. `docker run --rm --network host --user 1026:100 -v /path/to/media/tv:/downloads furey/fetchtv recordings --for-plex --save /downloads`. Without `--user`, the files belong to `root`.
 - **Other files**: `fetchtv.json` stays in the top of the save folder. Keep it there so that later runs know which files `fetchtv` saved. Plex and Freetvarr ignore it.
+
+## Convert to MP4
+
+`fetchtv` saves each recording as a `.ts` file, exactly as the Fetch box recorded it. To convert a file is to copy its picture and sound into another kind of video file. MP4 is the kind of video file that most phones, tablets, TVs, and video apps open. You may not need to convert anything:
+
+- **Play them as they are**: VLC (a free video player), Plex, Jellyfin, and Kodi play `.ts` files. On an Apple TV, iPhone, or iPad, use the Infuse or VLC app.
+- **HandBrake**: a free app with buttons, from [handbrake.fr](https://handbrake.fr). Choose the **Fast 1080p30** preset for an HD recording, or **Fast 576p25** for an SD recording. It does a full convert (a new picture and new sound), which takes several minutes to an hour or more for each hour of recording.
+- **ffmpeg**: a free command-line tool. A fast copy puts an hour of HD into an MP4 file in under a minute, with no loss of quality:
+
+  ```sh
+  ffmpeg -fflags +genpts -i "Show - S01E02.ts" -map 0:v:0 -map 0:a -c copy -sn -dn -ignore_unknown -movflags +faststart "Show - S01E02.mp4"
+  ```
+
+The Freetvarr guide's [Converting recordings to MP4](https://furey.github.io/freetvarr/guide/leaving-fetch#converting-recordings-to-mp4) has the full steps: how to install ffmpeg on a Mac, Windows, or Linux, a full convert for SD recordings and Apple devices, and commands that convert a whole folder at once.
+
+> [!WARNING]<br>
+> Download video software only from the official sites: VLC from [videolan.org](https://www.videolan.org), HandBrake from [handbrake.fr](https://handbrake.fr), and ffmpeg through Homebrew, `winget`, or your Linux package manager. Search ads and look-alike sites offer "free video converters" that can come with unwanted software or malware.
 
 ## Programmatic API
 
