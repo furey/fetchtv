@@ -75,6 +75,23 @@ const SAVE_STATUS = {
   CANCELLED: 'cancelled'
 }
 
+const LISTING_OUTCOME = Object.freeze({
+  OK: 'ok',
+  EMPTY: 'empty',
+  NO_CONTENT_DIRECTORY: 'no-content-directory',
+  BROWSE_FAILED: 'browse-failed',
+  NO_RECORDINGS_FOLDER: 'no-recordings-folder',
+  RECORDINGS_BROWSE_FAILED: 'recordings-browse-failed'
+})
+
+const LISTING_OUTCOME_HINTS = {
+  [LISTING_OUTCOME.NO_CONTENT_DIRECTORY]: 'The box does not offer a ContentDirectory service, so fetchtv cannot list its recordings. Restart the box and try again.',
+  [LISTING_OUTCOME.BROWSE_FAILED]: 'The box did not answer the request for its folders. Restart the box and try again.',
+  [LISTING_OUTCOME.NO_RECORDINGS_FOLDER]: 'The box lists no Recordings folder. A Fetch box that has lost its Fetch service (account cancelled or suspended, or no internet) shows its setup screen on the TV and lists no recordings until that is fixed.',
+  [LISTING_OUTCOME.RECORDINGS_BROWSE_FAILED]: 'The box did not answer the request for its Recordings folder. Restart the box and try again.',
+  [LISTING_OUTCOME.EMPTY]: 'The box answered, and its Recordings folder is empty.'
+}
+
 const httpClient = axios.create({
   timeout: REQUEST_TIMEOUT,
   maxContentLength: Infinity,
@@ -160,11 +177,13 @@ const main = async () => {
     }
 
     log(`Retrieving Fetch TV ${hasShowsCommand ? 'shows' : 'recordings'}…`)
-    const recordings = await getFetchRecordings({ location: fetchServer, filters })
+    let listingOutcome = null
+    const recordings = await getFetchRecordings({ location: fetchServer, filters, onOutcome: ({ outcome }) => { listingOutcome = outcome } })
 
     if (!argv.save) {
-      printRecordings({ recordings, jsonOutput: argv.json, showsOnly: hasShowsCommand })
+      printRecordings({ recordings, jsonOutput: argv.json, showsOnly: hasShowsCommand, listingOutcome })
     } else {
+      if (LISTING_OUTCOME_HINTS[listingOutcome]) logWarning(LISTING_OUTCOME_HINTS[listingOutcome])
       await handleSaveAction({
         recordings,
         savePath: path.resolve(argv.save),
@@ -255,40 +274,48 @@ const discoverFetch = async ({ ip, port }) => {
   return fetchServer
 }
 
-const getFetchRecordings = async ({ location, filters = {}, onProgress }) => {
+const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcome = () => {} }) => {
   const { folderFilter = [], excludeFilter = [], titleFilter = [], showsOnly = false, isRecordingFilter = false } = filters
 
   const apiService = await getApiService(location)
   if (!apiService) {
     logError('Could not find "ContentDirectory" service.')
+    onOutcome({ outcome: LISTING_OUTCOME.NO_CONTENT_DIRECTORY })
     return []
   }
 
   const requestManager = createRequestManager({ debug: argv.debug })
 
+  let rootError = null
   const baseFolders = await requestManager.enqueue(
-    () => findDirectories({ apiService, objectId: '0' }),
+    () => findDirectories({ apiService, objectId: '0', onFailure: (error) => { rootError = error } }),
     REQUEST_QUEUE_PRIORITY.ROOT
   )
   if (!baseFolders) {
     logError('Failed to browse root directory (ObjectID 0) after retries. Cannot list recordings.')
+    onOutcome({ outcome: LISTING_OUTCOME.BROWSE_FAILED, error: rootError?.message })
     return []
   }
 
   const recordingsFolder = baseFolders.find(f => f.title === 'Recordings')
   if (!recordingsFolder) {
     logWarning('No "Recordings" directory found in processed base directories.')
+    onOutcome({ outcome: LISTING_OUTCOME.NO_RECORDINGS_FOLDER, folders: baseFolders.map(folder => folder.title) })
     return []
   }
 
+  let recordingsError = null
   const showFolders = await requestManager.enqueue(
-    () => findDirectories({ apiService, objectId: recordingsFolder.id }),
+    () => findDirectories({ apiService, objectId: recordingsFolder.id, onFailure: (error) => { recordingsError = error } }),
     REQUEST_QUEUE_PRIORITY.SHOWS_FOLDER
   )
   if (!showFolders) {
     logError(`Failed to browse the main "Recordings" directory (ObjectID ${recordingsFolder.id}) after retries. Cannot list shows.`)
+    onOutcome({ outcome: LISTING_OUTCOME.RECORDINGS_BROWSE_FAILED, error: recordingsError?.message })
     return []
   }
+
+  onOutcome({ outcome: showFolders.length === 0 ? LISTING_OUTCOME.EMPTY : LISTING_OUTCOME.OK })
 
   const filteredShows = showFolders.filter(show => {
     const titleLower = show.title.toLowerCase()
@@ -793,7 +820,7 @@ const printInfo = (fetchServer) => {
   log(table.toString())
 }
 
-const printRecordings = ({ recordings, jsonOutput, showsOnly }) => {
+const printRecordings = ({ recordings, jsonOutput, showsOnly, listingOutcome }) => {
   const sortedRecordings = sortRecordingsByTitle(recordings)
 
   if (jsonOutput) {
@@ -813,6 +840,9 @@ const printRecordings = ({ recordings, jsonOutput, showsOnly }) => {
 
   if (!sortedRecordings || sortedRecordings.length === 0) {
     logWarning(`No ${context} found matching criteria!`)
+    const hint = LISTING_OUTCOME_HINTS[listingOutcome]
+    if (hint) return logWarning(hint)
+    if (listingOutcome) return
     return logWarning('A Fetch box whose account is cancelled shows its setup screen on the TV and lists no recordings.')
   }
 
@@ -1143,7 +1173,7 @@ const createBrowsePayload = ({ serviceType, objectId, requestedCount = 0 }) => `
  </s:Body>
 </s:Envelope>`
 
-const browseRequest = async ({ apiService, objectId = '0' }) => {
+const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {} }) => {
   const { cd_ctr: controlUrl, cd_service: serviceType } = apiService
 
   const payload = createBrowsePayload({ serviceType, objectId })
@@ -1198,11 +1228,12 @@ const browseRequest = async ({ apiService, objectId = '0' }) => {
   }
 
   logError(`Browse request failed definitively for ObjectID ${objectId} after ${BROWSE_RETRIES} attempts. Last error: ${lastError?.message || 'Unknown'}`)
+  onFailure(lastError ?? new Error('Unknown'))
   return null
 }
 
-const findDirectories = async ({ apiService, objectId = '0' }) => {
-  const didlLite = await browseRequest({ apiService, objectId })
+const findDirectories = async ({ apiService, objectId = '0', onFailure }) => {
+  const didlLite = await browseRequest({ apiService, objectId, onFailure })
   if (!didlLite) return null
   if (!didlLite.container) return []
 
@@ -2300,6 +2331,7 @@ export {
   downloadFile,
   isCurrentlyRecording,
   formatItem,
+  LISTING_OUTCOME,
   createValidFilename,
   processPathTemplate,
   parseXml,

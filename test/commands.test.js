@@ -26,6 +26,7 @@ const collectBody = (req) =>
 
 let server = null
 let serverPort = null
+let rootFixture = 'browse-root.xml'
 
 const startServer = () =>
   new Promise((resolve) => {
@@ -39,7 +40,7 @@ const startServer = () =>
         const body = await collectBody(req)
         const objectId = extractObjectId(body)
         const fixture = (
-          objectId === '0' ? 'browse-root.xml' :
+          objectId === '0' ? rootFixture :
           objectId === '1' ? 'browse-recordings.xml' :
           (objectId === '10' || objectId === '11' || objectId === '12')
             ? 'browse-show-items.xml' :
@@ -192,4 +193,22 @@ test('CLI: --for-plex without --save logs an ignored warning', async () => {
   ])
   assert.equal(code, 0)
   assert.match(stdout, /--for-plex .* ignored/i)
+})
+
+test('CLI: a box with no Recordings folder gets the lost Fetch service hint', async () => {
+  rootFixture = 'browse-empty.xml'
+  try {
+    const { code, stdout } = await runCli(['recordings', '--ip', '127.0.0.1', '--port', String(serverPort)])
+    assert.equal(code, 0)
+    assert.match(stdout, /No Recordings found matching criteria!/)
+    assert.match(stdout, /The box lists no Recordings folder\. A Fetch box that has lost its Fetch service/)
+  } finally {
+    rootFixture = 'browse-root.xml'
+  }
+})
+
+test('CLI: a filter that matches nothing gets no box hint', async () => {
+  const { stdout } = await runCli(['recordings', '--ip', '127.0.0.1', '--port', String(serverPort), '--show', 'nothing-matches'])
+  assert.match(stdout, /No Recordings found matching criteria!/)
+  assert.doesNotMatch(stdout, /Fetch service|Restart the box|is empty/)
 })
