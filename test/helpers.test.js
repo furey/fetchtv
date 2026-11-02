@@ -42,9 +42,8 @@ test('createValidFilename: handles non-string input gracefully', () => {
   assert.equal(createValidFilename(undefined), '')
 })
 
-test('createValidFilename: caps at MAX_FILENAME - 10 chars', () => {
-  const long = 'x'.repeat(500)
-  assert.equal(createValidFilename(long).length, 245)
+test('createValidFilename: caps a long name at 120 characters', () => {
+  assert.equal(createValidFilename('x'.repeat(300)).length, 120)
 })
 
 test('createValidFilename: preserves valid unicode and punctuation', () => {
@@ -200,4 +199,71 @@ test('formatItem: projects only the public-facing keys', () => {
 test('createValidFilename: trims spaces left by removed characters', () => {
   assert.equal(createValidFilename('Gogglebox: '), 'Gogglebox')
   assert.equal(createValidFilename(' ?Show'), 'Show')
+})
+
+test('createValidFilename: strips trailing dots and spaces', () => {
+  assert.equal(createValidFilename('Trailing Dots...'), 'Trailing Dots')
+  assert.equal(createValidFilename('Show. . .'), 'Show')
+  assert.equal(createValidFilename('Mr. Bean'), 'Mr. Bean')
+  assert.equal(createValidFilename('...'), '_')
+})
+
+test('createValidFilename: suffixes Windows device names', () => {
+  assert.equal(createValidFilename('CON'), 'CON_')
+  assert.equal(createValidFilename('nul'), 'nul_')
+  assert.equal(createValidFilename('Com1'), 'Com1_')
+  assert.equal(createValidFilename('LPT9.backup'), 'LPT9_.backup')
+  assert.equal(createValidFilename('aux.'), 'aux_')
+})
+
+test('createValidFilename: keeps names that only start with a device name', () => {
+  assert.equal(createValidFilename('Console Wars'), 'Console Wars')
+  assert.equal(createValidFilename('Con Man'), 'Con Man')
+  assert.equal(createValidFilename('NUL (2020)'), 'NUL (2020)')
+  assert.equal(createValidFilename('COM10'), 'COM10')
+})
+
+test('createValidFilename: keeps non-ASCII characters', () => {
+  assert.equal(createValidFilename('Amélie – Café Ñandú 東京 😀'), 'Amélie – Café Ñandú 東京 😀')
+})
+
+test('createValidFilename: caps a long non-ASCII name at 240 bytes without splitting a character', () => {
+  const result = createValidFilename('😀'.repeat(100))
+  assert.equal(result, '😀'.repeat(60))
+  assert.ok(Buffer.byteLength(result) <= 240)
+})
+
+test('createValidFilename: keeps the season and episode prefix and drops a trailing space left by the cap', () => {
+  const result = createValidFilename(`S01E02 - ${'a'.repeat(110)} bcdefgh`)
+  assert.equal(result, `S01E02 - ${'a'.repeat(110)}`)
+})
+
+test('createValidFilename: gives the same name when run twice', () => {
+  const names = ['CON', 'Trailing Dots...', '😀'.repeat(100), `${'b'.repeat(119)}. x`, 'Bluey']
+  for (const name of names) {
+    const once = createValidFilename(name)
+    assert.equal(createValidFilename(once), once)
+  }
+})
+
+test('createValidFilename: leaves names that were already valid unchanged', () => {
+  const names = [
+    'Bluey', 'S1 E2 - Hospital', "I'm a Celebrity... Get Me Out of Here!", 'Mr. Bean', 'Gogglebox: ',
+    'The Traitors (AU)', 'Amélie', '東京 2020', 'a/b\\c', 'x'.repeat(120), 'Con Man',
+  ]
+  const before = (name) => String(name).replace(/[<>:"/\\|?*\x00-\x1F]/g, '').replace(/\s+/g, ' ').trim().slice(0, 245)
+  for (const name of names) assert.equal(createValidFilename(name), before(name))
+})
+
+test('createValidFilename: cuts long names between whole characters', () => {
+  assert.equal(createValidFilename(`${'a'.repeat(119)}é`), 'a'.repeat(119))
+  assert.equal(createValidFilename(`${'a'.repeat(119)}🇦🇺`), 'a'.repeat(119))
+  assert.equal(createValidFilename(`${'a'.repeat(115)}👨‍👩‍👧‍👦`), 'a'.repeat(115))
+  assert.equal(createValidFilename(`${'a'.repeat(110)}👨‍👩‍👧‍👦${'b'.repeat(20)}`), `${'a'.repeat(110)}👨‍👩‍👧‍👦${'b'.repeat(3)}`)
+})
+
+test('createValidFilename: gives "_" for a name with nothing usable left', () => {
+  assert.equal(createValidFilename('   '), '_')
+  assert.equal(createValidFilename('???'), '_')
+  assert.equal(createValidFilename(''), '')
 })
