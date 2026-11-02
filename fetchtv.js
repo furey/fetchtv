@@ -52,6 +52,8 @@ const FETCH_MANUFACTURER_URL = 'http://www.fetch.com/'
 const SIZE_TOLERANCE = 1024
 const RANGE_NOT_SATISFIABLE = 416
 const RESUME_TIMEOUT = REQUEST_TIMEOUT * 2
+const BODY_IDLE_TIMEOUT = 60000
+const BOX_SILENT_CODE = 'EBOXSILENT'
 const UNPAUSED_TAIL_BYTES = 32 * 1024 * 1024
 const MIN_CONCURRENT_DOWNLOADS = 1
 const MAX_CONCURRENT_DOWNLOADS = 10
@@ -483,17 +485,16 @@ const saveRecordings = async ({
   template,
   forPlex = false,
   overwrite,
+  copyAgain = false,
   concurrency = DEFAULT_CONCURRENT_DOWNLOADS,
   retryDelays = DOWNLOAD_RETRY_DELAYS,
+  idleTimeout = BODY_IDLE_TIMEOUT,
   onProgress,
   onResult,
   signal
 }) => {
   const savedFilesDb = await loadSavedFiles(savePath)
-  const listFoldersOf = createFolderLister()
-  const ownerByPath = ownersBySavedPath(savedFilesDb)
-  const savedFolders = portableSavedFolders(savedFilesDb)
-  const claimedPaths = new Set()
+  const plans = await planEachSave({ recordings, savePath, template, forPlex, overwrite, copyAgain, savedFilesDb, warn: logWarning })
   const jsonResults = []
   const tasks = []
   const addResult = (result) => {
@@ -501,116 +502,60 @@ const saveRecordings = async ({
     if (onResult) onResult(result)
   }
 
-  for (const show of recordings) {
-    if (!show.items || show.items.length === 0) continue
+  for (const { show, item, filePath, takenPath, alreadySaved, partialPath } of plans) {
+    if (takenPath) {
+      log(chalk.yellow(`${path.relative(savePath, takenPath)} already exists and fetchtv did not save it. Saving as ${path.basename(filePath)} instead.`))
+    }
+    const showDirPath = path.dirname(filePath)
+    const lockFilePath = `${filePath}${CONST_LOCK}`
 
-    for (const item of show.items) {
-      let filePath
-      let showDirPath
-      const templateData = {
-        show_title: show.title,
-        recording_title: item.title,
-        season_number: item.season_number || '',
-        season_number_padded: item.season_number_padded || '',
-        episode_number: item.episode_number || '',
-        episode_number_padded: item.episode_number_padded || '',
-        ext: item.ext || 'ts'
-      }
-
-      const showFolder = existingFolderFor({ title: show.title, folders: await listFoldersOf(savePath), savedFolders })
-        || createValidFilename(show.title)
-
-      const defaultFilePath = (nameFile = createValidFilename) => {
-        const itemFileName = `${nameFile(buildDefaultFileBase(templateData))}.${templateData.ext}`
-        return path.join(savePath, showFolder, itemFileName)
-      }
-
-      let plannedPath
-      let legacyPlannedPath = defaultFilePath(createLegacyFilename)
-      if (forPlex) {
-        plannedPath = await plexFilePath({ savePath, showFolder, templateData, listFoldersOf })
-        if (plannedPath) legacyPlannedPath = null
-        if (!plannedPath) {
-          logWarning(`${item.title} has no season and episode number. Using the default name for it.`)
-          plannedPath = defaultFilePath()
-        }
-      } else if (template) {
+    let lockStillExistsAfterCheck = false
+    if (fsc.existsSync(lockFilePath)) {
+      const isStale = await isLockFileStale(lockFilePath)
+      if (isStale) {
+        log(chalk.yellow(`Removing stale lock file for ${item.title}`))
         try {
-          const legacyRelativePath = buildTemplatePath({ templateString: template, data: templateData, nameFile: createLegacyFilename })
-          const relativePath = withSavedTemplateFolders({
-            relativePath: processPathTemplate({ templateString: template, data: templateData }),
-            legacyRelativePath,
-            savedFolders
-          })
-          plannedPath = path.resolve(savePath, relativePath)
-          legacyPlannedPath = path.resolve(savePath, legacyRelativePath)
+          fsc.unlinkSync(lockFilePath)
+          debug('Removed stale lock file: %s', lockFilePath)
+          lockStillExistsAfterCheck = false
         } catch (err) {
-          logWarning(`${err.message} Using the default name for ${item.title}.`)
-          plannedPath = defaultFilePath()
-        }
-      } else {
-        plannedPath = defaultFilePath()
-      }
-
-      const target = await chooseSaveTarget({ plannedPath, legacyPlannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths })
-      filePath = target.filePath
-      claimedPaths.add(filePath)
-      if (target.takenPath) {
-        log(chalk.yellow(`${path.relative(savePath, target.takenPath)} already exists and fetchtv did not save it. Saving as ${path.basename(filePath)} instead.`))
-      }
-      showDirPath = path.dirname(filePath)
-      const lockFilePath = `${filePath}${CONST_LOCK}`
-
-      let lockStillExistsAfterCheck = false
-      if (fsc.existsSync(lockFilePath)) {
-        const isStale = await isLockFileStale(lockFilePath)
-        if (isStale) {
-          log(chalk.yellow(`Removing stale lock file for ${item.title}`))
-          try {
-            fsc.unlinkSync(lockFilePath)
-            debug('Removed stale lock file: %s', lockFilePath)
-            lockStillExistsAfterCheck = false
-          } catch (err) {
-            debug('Error removing stale lock file: %O', err)
-            logWarning(`Failed to remove stale lock file for ${item.title}, skipping item.`)
-            lockStillExistsAfterCheck = true
-          }
-        } else {
+          debug('Error removing stale lock file: %O', err)
+          logWarning(`Failed to remove stale lock file for ${item.title}, skipping item.`)
           lockStillExistsAfterCheck = true
         }
       } else {
-        lockStillExistsAfterCheck = false
+        lockStillExistsAfterCheck = true
       }
-
-      if (lockStillExistsAfterCheck) {
-        log(chalk.gray(`Skipping ${item.title} (lock file exists or failed to remove stale lock).`))
-        addResult({
-          item: formatItem(item),
-          recorded: false,
-          status: SAVE_STATUS.LOCKED,
-          warning: 'Skipped (lock file active or stale lock removal failed)'
-        })
-        continue
-      }
-
-      const savedEntry = savedFilesDb[item.id]
-      if (savedEntry && !overwrite) {
-        const isComplete = await isSavedFileComplete({ filePath, savedEntry, item })
-        if (isComplete) {
-          log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
-          addResult({
-            item: formatItem(item),
-            recorded: false,
-            status: SAVE_STATUS.ALREADY_SAVED,
-            warning: 'Skipped (already saved and complete)'
-          })
-          continue
-        }
-        log(chalk.yellow(`Saved file is missing or incomplete, saving again: ${show.title} / ${item.title}`))
-      }
-
-      tasks.push({ item, filePath, showDirPath, showTitle: show.title })
+    } else {
+      lockStillExistsAfterCheck = false
     }
+
+    if (lockStillExistsAfterCheck) {
+      log(chalk.gray(`Skipping ${item.title} (lock file exists or failed to remove stale lock).`))
+      addResult({
+        item: formatItem(item),
+        recorded: false,
+        status: SAVE_STATUS.LOCKED,
+        warning: 'Skipped (lock file active or stale lock removal failed)'
+      })
+      continue
+    }
+
+    if (alreadySaved) {
+      log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
+      addResult({
+        item: formatItem(item),
+        recorded: false,
+        status: SAVE_STATUS.ALREADY_SAVED,
+        warning: 'Skipped (already saved and complete)'
+      })
+      continue
+    }
+    if (savedFilesDb[item.id] && !overwrite) {
+      log(chalk.yellow(`Saved file is missing or incomplete, saving again: ${show.title} / ${item.title}`))
+    }
+
+    tasks.push({ item, filePath, showDirPath, showTitle: show.title, partialPath })
   }
 
   if (tasks.length === 0) {
@@ -642,6 +587,8 @@ const saveRecordings = async ({
       continue
     }
 
+    if (task.partialPath) await movePartialTo({ savePath, partialPath: task.partialPath, filePath: task.filePath })
+
     while (activePromises.size >= concurrency) {
       await Promise.race(activePromises)
     }
@@ -659,7 +606,7 @@ const saveRecordings = async ({
       await recordSaveStart({ savePath, savedFilesDb, item: task.item, filePath: task.filePath })
     }
 
-    const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays, signal })
+    const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays, idleTimeout, signal })
       .then(async (downloadResult) => {
         const resultEntry = {
           item: formatItem(task.item),
@@ -720,6 +667,143 @@ const saveRecordings = async ({
   return jsonResults
 }
 
+const planSaves = async ({ recordings, savePath, template, forPlex = false, overwrite = false, copyAgain = false }) => {
+  const savedFilesDb = await loadSavedFiles(savePath)
+  const plans = await planEachSave({ recordings, savePath, template, forPlex, overwrite, copyAgain, savedFilesDb, warn: () => {} })
+  return plans.map(({ item, filePath, alreadySaved }) => ({ item: formatItem(item), filePath, alreadySaved }))
+}
+
+const planEachSave = async ({ recordings, savePath, template, forPlex, overwrite, copyAgain, savedFilesDb, warn }) => {
+  const context = {
+    savePath,
+    template,
+    forPlex,
+    overwrite,
+    copyAgain,
+    savedFilesDb,
+    warn,
+    listFoldersOf: createFolderLister(),
+    ownerByPath: ownersBySavedPath(savedFilesDb),
+    savedFolders: portableSavedFolders(savedFilesDb),
+    claimedPaths: new Set()
+  }
+  const plans = []
+  for (const show of recordings) {
+    for (const item of show.items ?? []) plans.push(await planSave({ show, item, ...context }))
+  }
+  return plans
+}
+
+const planSave = async ({ show, item, savePath, template, forPlex, overwrite, copyAgain, savedFilesDb, warn, listFoldersOf, ownerByPath, savedFolders, claimedPaths }) => {
+  const templateData = templateDataFor({ show, item })
+  const { plannedPath, legacyPlannedPath } = await plannedPathsFor({ item, savePath, template, forPlex, templateData, showTitle: show.title, warn, listFoldersOf, savedFolders })
+  const target = await chooseSaveTarget({ plannedPath, legacyPlannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths })
+  const savedEntry = overwrite ? undefined : savedFilesDb[item.id]
+  const earlierPaths = savedEntry && isSameTitle(savedTitleOf(savedEntry), item.title)
+    ? earlierCopyPaths({ savePath, savedEntry, legacyPaths: [legacyPlannedPath, legacyDefaultPath({ savePath, show, templateData })] })
+    : []
+  const checkedPaths = copyAgain ? [target.filePath] : [target.filePath, ...earlierPaths]
+  const savedAt = savedEntry ? await firstCompleteCopy({ filePaths: checkedPaths, savedEntry, item }) : null
+  if (savedAt) {
+    claimedPaths.add(savedAt)
+    return { show, item, filePath: savedAt, takenPath: null, alreadySaved: true, partialPath: null }
+  }
+  claimedPaths.add(target.filePath)
+  const partialPath = await movablePartialFor({ earlierPaths, filePath: target.filePath })
+  return { show, item, filePath: target.filePath, takenPath: target.takenPath, alreadySaved: false, partialPath }
+}
+
+const templateDataFor = ({ show, item }) => ({
+  show_title: show.title,
+  recording_title: item.title,
+  season_number: item.season_number || '',
+  season_number_padded: item.season_number_padded || '',
+  episode_number: item.episode_number || '',
+  episode_number_padded: item.episode_number_padded || '',
+  ext: item.ext || 'ts'
+})
+
+const plannedPathsFor = async ({ item, savePath, template, forPlex, templateData, showTitle, warn, listFoldersOf, savedFolders }) => {
+  const showFolder = existingFolderFor({ title: showTitle, folders: await listFoldersOf(savePath), savedFolders })
+    || createValidFilename(showTitle)
+  const defaultFilePath = (nameFile = createValidFilename) => {
+    const itemFileName = `${nameFile(buildDefaultFileBase(templateData))}.${templateData.ext}`
+    return path.join(savePath, showFolder, itemFileName)
+  }
+  const legacyPlannedPath = defaultFilePath(createLegacyFilename)
+  if (forPlex) {
+    const plexPath = await plexFilePath({ savePath, showFolder, templateData, listFoldersOf })
+    if (plexPath) return { plannedPath: plexPath, legacyPlannedPath: null }
+    warn(`${item.title} has no season and episode number. Using the default name for it.`)
+    return { plannedPath: defaultFilePath(), legacyPlannedPath }
+  }
+  if (!template) return { plannedPath: defaultFilePath(), legacyPlannedPath }
+  try {
+    const legacyRelativePath = buildTemplatePath({ templateString: template, data: templateData, nameFile: createLegacyFilename })
+    const relativePath = withSavedTemplateFolders({
+      relativePath: processPathTemplate({ templateString: template, data: templateData }),
+      legacyRelativePath,
+      savedFolders
+    })
+    return { plannedPath: path.resolve(savePath, relativePath), legacyPlannedPath: path.resolve(savePath, legacyRelativePath) }
+  } catch (err) {
+    warn(`${err.message} Using the default name for ${item.title}.`)
+    return { plannedPath: defaultFilePath(), legacyPlannedPath }
+  }
+}
+
+const savedTitleOf = (savedEntry) => (typeof savedEntry === 'string' ? savedEntry : savedEntry?.title)
+
+const isSameTitle = (savedTitle, title) => cleanFilename(savedTitle ?? '') === cleanFilename(title ?? '')
+
+const legacyDefaultPath = ({ savePath, show, templateData }) =>
+  path.join(savePath, createLegacyFilename(show.title), `${createLegacyFilename(buildDefaultFileBase(templateData))}.${templateData.ext}`)
+
+const earlierCopyPaths = ({ savePath, savedEntry, legacyPaths }) => {
+  const candidates = typeof savedEntry?.path === 'string'
+    ? [path.resolve(savePath, savedEntry.path)]
+    : legacyPaths.filter(Boolean)
+  return [...new Set(candidates)].filter(filePath => isInsideFolder({ folder: savePath, filePath }))
+}
+
+const isInsideFolder = ({ folder, filePath }) => {
+  const relative = path.relative(path.resolve(folder), filePath)
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
+}
+
+const firstCompleteCopy = async ({ filePaths, savedEntry, item }) => {
+  for (const filePath of new Set(filePaths)) {
+    if (await isSavedFileComplete({ filePath, savedEntry, item })) return filePath
+  }
+  return null
+}
+
+const movablePartialFor = async ({ earlierPaths, filePath }) => {
+  if (await anyExists([filePath, `${filePath}${PART_SUFFIX}`])) return null
+  for (const earlierPath of earlierPaths) {
+    if (earlierPath === filePath) continue
+    const partialPath = `${earlierPath}${PART_SUFFIX}`
+    if (!(await anyExists([partialPath]))) continue
+    if (await isLockedByAnotherSave(`${earlierPath}${CONST_LOCK}`)) continue
+    return partialPath
+  }
+  return null
+}
+
+const isLockedByAnotherSave = async (lockFilePath) =>
+  fsc.existsSync(lockFilePath) && !(await isLockFileStale(lockFilePath))
+
+const movePartialTo = async ({ savePath, partialPath, filePath }) => {
+  const newPartialPath = `${filePath}${PART_SUFFIX}`
+  try {
+    await fs.rename(partialPath, newPartialPath)
+    log(chalk.yellow(`Moved ${path.relative(savePath, partialPath)} to ${path.relative(savePath, newPartialPath)} to carry on saving it under the new name.`))
+  } catch (err) {
+    debug('Could not move %s to %s: %O', partialPath, newPartialPath, err)
+    logWarning(`Could not move ${path.relative(savePath, partialPath)} to the new name (${err.message}). Saving from the start.`)
+  }
+}
+
 const createSaveMultiBar = () => {
   progressBarActive = true
   activeMultiBar = new cliProgress.MultiBar({
@@ -769,9 +853,9 @@ const cancelledResult = (item) => ({
   warning: 'Stopped before this recording started.'
 })
 
-const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite, retryDelays = DOWNLOAD_RETRY_DELAYS, signal }) => {
+const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite, retryDelays = DOWNLOAD_RETRY_DELAYS, idleTimeout, signal }) => {
   const maxAttempts = retryDelays.length + 1
-  let result = await downloadFile({ item, filePath, progressBar, overwrite, signal })
+  let result = await downloadFile({ item, filePath, progressBar, overwrite, idleTimeout, signal })
   let attempts = 1
 
   while (result.retryable && attempts < maxAttempts && !isShuttingDown && !signal?.aborted) {
@@ -780,7 +864,7 @@ const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite,
     log(chalk.yellow(`Retrying ${item.title} in ${formatSeconds(delay)} (attempt ${attempts} of ${maxAttempts})…`))
     await waitUnlessAborted({ delay, signal })
     if (signal?.aborted) return { ...result, retryable: false, cancelled: true, attempts }
-    result = await downloadFile({ item, filePath, progressBar, overwrite: false, signal })
+    result = await downloadFile({ item, filePath, progressBar, overwrite: false, idleTimeout, signal })
   }
 
   return { ...result, attempts }
@@ -1386,7 +1470,7 @@ const isCurrentlyRecording = async (item) => {
   }
 }
 
-const downloadFile = async ({ item, filePath, progressBar, overwrite = false, signal }) => {
+const downloadFile = async ({ item, filePath, progressBar, overwrite = false, idleTimeout = BODY_IDLE_TIMEOUT, signal }) => {
   // Refuse to download items whose UPnP listing reports a non-positive size
   // (Fetch TV's "-1" sentinel for in-progress recordings) — the stream would
   // serve truncated bytes and we'd silently end up with an incomplete file.
@@ -1606,6 +1690,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, si
 
     const expectedLength = Math.max(totalLength, isPositiveSize(item.size) ? item.size : 0)
     copyKeepingTheTail({ responseStream, writer, bytesLeft: () => (expectedLength > 0 ? expectedLength - downloadedLength : Infinity) })
+    stopWhenTheBoxGoesSilent({ response, idleTimeout })
 
     return new Promise((resolve, reject) => {
       writer.on('finish', async () => {
@@ -1801,6 +1886,32 @@ const copyKeepingTheTail = ({ responseStream, writer, bytesLeft }) => {
   responseStream.once('end', () => writer.end())
 }
 
+const stopWhenTheBoxGoesSilent = ({ response, idleTimeout }) => {
+  const responseStream = response.data
+  let timer = null
+  const disarm = () => clearTimeout(timer)
+  const arm = () => {
+    disarm()
+    if (responseStream.destroyed || responseStream.isPaused()) return
+    timer = setTimeout(() => dropSilentResponse({ response, error: boxSilentError(idleTimeout) }), idleTimeout)
+  }
+  responseStream.on('data', arm)
+  responseStream.on('resume', arm)
+  responseStream.on('pause', disarm)
+  responseStream.once('end', disarm)
+  responseStream.once('close', disarm)
+  responseStream.once('error', disarm)
+  arm()
+}
+
+const dropSilentResponse = ({ response, error }) => {
+  response.request?.destroy(error)
+  response.data.destroy(error)
+}
+
+const boxSilentError = (idleTimeout) =>
+  Object.assign(new Error(`The box sent no data for ${formatSeconds(idleTimeout)}`), { code: BOX_SILENT_CODE })
+
 const isFarFromTheEnd = (bytesLeft) => bytesLeft > UNPAUSED_TAIL_BYTES
 
 const untilResponse = async ({ signal }, request) => {
@@ -1874,6 +1985,7 @@ const adoptInPlacePartial = async ({ item, filePath, partFilePath }) => {
 const describeInterruption = ({ item, err, completionPercentage }) => {
   const message = `Download interrupted for ${item.title} at ${completionPercentage.toFixed(1)}%.`
   if (err.code === 'ECONNRESET') return `${message} (Connection reset)`
+  if (err.code === BOX_SILENT_CODE) return `${message} (${err.message})`
   if (err.code === 'ECONNABORTED' || err.message?.toLowerCase().includes('timeout')) return `${message} (Timeout)`
   if (err.message?.includes('Premature close')) return `${message} (Premature close)`
   return `${message} (Error: ${err.message})`
@@ -2366,6 +2478,7 @@ export {
   addSavedFile,
   createRequestManager,
   saveRecordings,
+  planSaves,
   handleSaveAction,
   summariseSaveResults,
   formatSaveSummary,
