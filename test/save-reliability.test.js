@@ -680,3 +680,79 @@ test('ownership: a partial file from an interrupted run is resumed from its .par
   assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
   assert.equal(await exists(`${filePathFor(item)}.part`), false)
 })
+
+const LONG_SHOW = `The Extremely Long Show ${'x'.repeat(200)}`
+
+test('portable names: a long show name under --for-plex saves with names Windows can open', async () => {
+  const { result } = await saveForPlex({ showTitle: LONG_SHOW, items: [makeItem({ id: '60', route: '/full' })] })
+
+  const showFolder = LONG_SHOW.slice(0, 120)
+  assert.equal(result[0].status, 'saved')
+  assert.ok(await exists(path.join(tmpDir, showFolder, 'Season 01', `${showFolder} - S01E60.ts`)))
+})
+
+test('portable names: a show name with trailing dots saves in a folder without them', async () => {
+  await saveForPlex({ showTitle: 'Trailing Dots...', items: [makeItem({ id: '61', route: '/full' })] })
+
+  assert.ok(await exists(path.join(tmpDir, 'Trailing Dots', 'Season 01', 'Trailing Dots - S01E61.ts')))
+})
+
+test('portable names: a long name saved before the cap keeps its name and is skipped', async () => {
+  const title = `S1 E62 - ${'y'.repeat(150)}`
+  const item = makeItem({ id: '62', route: '/full', title })
+  await writeForeign(filePathFor(item))
+  await writeDb({ 62: { title, size: FOREIGN.length, path: `Bluey/${title}.ts` } })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([{ ...item, size: FOREIGN.length }]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'already_saved')
+  assert.deepEqual(requestsFor('/full'), [])
+  assert.deepEqual(await fs.readdir(path.join(tmpDir, 'Bluey')), [`${title}.ts`])
+})
+
+test('portable names: a new episode joins a long show folder that already holds saved files', async () => {
+  const legacyFolder = LONG_SHOW.slice(0, 245)
+  const savedPath = `${legacyFolder}/Season 01/${legacyFolder.slice(0, 200)}.ts`
+  await makeFolders(`${legacyFolder}/Season 01`)
+  await writeDb({ 63: { title: 'S1 E63 - Test', size: BODY.length, path: savedPath } })
+  await saveForPlex({ showTitle: LONG_SHOW, items: [makeItem({ id: '64', route: '/full' })] })
+
+  assert.deepEqual(await fs.readdir(tmpDir).then(names => names.filter(name => name !== 'fetchtv.json')), [legacyFolder])
+  assert.ok(await exists(path.join(tmpDir, legacyFolder, 'Season 01', `${legacyFolder} - S01E64.ts`)))
+})
+
+test('portable names: a file in a long show folder is capped when the old name would pass 255 bytes', async () => {
+  const showTitle = 'z'.repeat(260)
+  const legacyFolder = showTitle.slice(0, 245)
+  await makeFolders(`${legacyFolder}/Season 01`)
+  await writeDb({ 67: { title: 'S1 E67 - Test', size: BODY.length, path: `${legacyFolder}/Season 01/S1 E67 - Test.ts` } })
+  await saveForPlex({ showTitle, items: [makeItem({ id: '68', route: '/full' })] })
+
+  assert.ok(await exists(path.join(tmpDir, legacyFolder, 'Season 01', `${'z'.repeat(120)} - S01E68.ts`)))
+})
+
+test('portable names: a folder whose name was invalid on Windows is not reused', async () => {
+  await makeFolders('Trailing Dots.../Season 01')
+  await writeDb({ 65: { title: 'S1 E65 - Test', size: BODY.length, path: 'Trailing Dots.../Season 01/Trailing Dots... - S01E65.ts' } })
+  await saveForPlex({ showTitle: 'Trailing Dots...', items: [makeItem({ id: '66', route: '/full' })] })
+
+  assert.ok(await exists(path.join(tmpDir, 'Trailing Dots', 'Season 01', 'Trailing Dots - S01E66.ts')))
+})
+
+test('portable names: a long template name saved before the cap keeps its name and is skipped', async () => {
+  const title = `S1 E69 - ${'w'.repeat(150)}`
+  const savedPath = `Bluey/Season 1/Bluey - S1E69 - ${title}.ts`
+  await writeForeign(path.join(tmpDir, ...savedPath.split('/')))
+  await writeDb({ 69: { title, size: FOREIGN.length, path: savedPath } })
+  const item = { ...makeItem({ id: '69', route: '/full', title }), size: FOREIGN.length, episode_number_padded: '69' }
+  const { result } = await silenceConsole(() =>
+    saveRecordings({
+      recordings: makeRecordings([item]),
+      savePath: tmpDir,
+      template: '${show_title}/Season ${season_number}/${show_title} - S${season_number}E${episode_number_padded} - ${recording_title}.${ext}',
+      retryDelays: NO_RETRIES,
+    }))
+
+  assert.equal(result[0].status, 'already_saved')
+  assert.deepEqual(requestsFor('/full'), [])
+})

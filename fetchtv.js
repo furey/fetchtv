@@ -33,6 +33,8 @@ const activeLockFiles = new Set()
 
 const BROWSE_RETRIES = 3
 const MAX_FILENAME = 255
+const MAX_NAME_CHARS = 120
+const MAX_NAME_BYTES = 240
 const FETCHTV_PORT = 49152
 const CONST_LOCK = '.lock'
 const PART_SUFFIX = '.part'
@@ -374,8 +376,12 @@ const plexFilePath = async ({ savePath, showFolder, templateData, listFoldersOf 
   const season = Number(season_number)
   const showPath = path.join(savePath, showFolder)
   const seasonFolder = seasonFolderFor({ season, folders: await listFoldersOf(showPath) })
-  const fileName = `${showFolder} - S${padNumber(season)}E${padNumber(Number(episode_number))}.${ext}`
-  return path.join(showPath, seasonFolder, fileName)
+  const episodeSuffix = ` - S${padNumber(season)}E${padNumber(Number(episode_number))}.${ext}`
+  const fileName = `${showFolder}${episodeSuffix}`
+  const portableFileName = Buffer.byteLength(fileName) > MAX_FILENAME
+    ? `${createValidFilename(showFolder)}${episodeSuffix}`
+    : fileName
+  return path.join(showPath, seasonFolder, portableFileName)
 }
 
 const padNumber = (number) => String(number).padStart(2, '0')
@@ -393,11 +399,14 @@ const seasonNumberOf = (folderName) => {
 
 const SEASON_FOLDER_PATTERN = /^season\s*(\d+)$/i
 
-const existingFolderFor = ({ title, folders }) => {
+const existingFolderFor = ({ title, folders, savedFolders = new Set() }) => {
   const wanted = createValidFilename(title).toLowerCase()
+  const legacy = createLegacyFilename(title).toLowerCase()
   const sorted = [...folders].sort()
   const exact = sorted.find(folder => folder.toLowerCase() === wanted)
   if (exact) return exact
+  const legacyFolder = savedFolders.has(legacy) && sorted.find(folder => folder.toLowerCase() === legacy)
+  if (legacyFolder) return legacyFolder
   const suffixed = sorted.filter(folder => isSuffixedFolderOf({ folder, wanted }))
   return suffixed.length === 1 ? suffixed[0] : undefined
 }
@@ -442,6 +451,7 @@ const saveRecordings = async ({
   const savedFilesDb = await loadSavedFiles(savePath)
   const listFoldersOf = createFolderLister()
   const ownerByPath = ownersBySavedPath(savedFilesDb)
+  const savedFolders = portableSavedFolders(savedFilesDb)
   const claimedPaths = new Set()
   const jsonResults = []
   const tasks = []
@@ -466,17 +476,19 @@ const saveRecordings = async ({
         ext: item.ext || 'ts'
       }
 
-      const showFolder = existingFolderFor({ title: show.title, folders: await listFoldersOf(savePath) })
+      const showFolder = existingFolderFor({ title: show.title, folders: await listFoldersOf(savePath), savedFolders })
         || createValidFilename(show.title)
 
-      const defaultFilePath = () => {
-        const itemFileName = `${createValidFilename(buildDefaultFileBase(templateData))}.${templateData.ext}`
+      const defaultFilePath = (nameFile = createValidFilename) => {
+        const itemFileName = `${nameFile(buildDefaultFileBase(templateData))}.${templateData.ext}`
         return path.join(savePath, showFolder, itemFileName)
       }
 
       let plannedPath
+      let legacyPlannedPath = defaultFilePath(createLegacyFilename)
       if (forPlex) {
         plannedPath = await plexFilePath({ savePath, showFolder, templateData, listFoldersOf })
+        if (plannedPath) legacyPlannedPath = null
         if (!plannedPath) {
           logWarning(`${item.title} has no season and episode number. Using the default name for it.`)
           plannedPath = defaultFilePath()
@@ -485,6 +497,7 @@ const saveRecordings = async ({
         try {
           const relativePath = processPathTemplate({ templateString: template, data: templateData })
           plannedPath = path.resolve(savePath, relativePath)
+          legacyPlannedPath = path.resolve(savePath, buildTemplatePath({ templateString: template, data: templateData, nameFile: createLegacyFilename }))
         } catch (err) {
           logWarning(`${err.message} Using the default name for ${item.title}.`)
           plannedPath = defaultFilePath()
@@ -493,7 +506,7 @@ const saveRecordings = async ({
         plannedPath = defaultFilePath()
       }
 
-      const target = await chooseSaveTarget({ plannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths })
+      const target = await chooseSaveTarget({ plannedPath, legacyPlannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths })
       filePath = target.filePath
       claimedPaths.add(filePath)
       if (target.takenPath) {
@@ -1963,16 +1976,54 @@ const formatItem = (item) => ({
 })
 
 const createValidFilename = (filename = '') => {
-  let result = _.chain(filename)
+  const cleaned = cleanFilename(filename)
+  return cleaned && toPortableName(cleaned)
+}
+
+const toPortableName = (name) => suffixReservedName(capName(name) || '_')
+
+const createLegacyFilename = (filename = '') => cleanFilename(filename).slice(0, MAX_FILENAME - 10)
+
+const cleanFilename = (filename) => {
+  const result = _.chain(filename)
     .toString()
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .value()
-
-  if (result === '.' || result === '..') result = '_'
-  return result.slice(0, MAX_FILENAME - 10)
+  return result === '.' || result === '..' ? '_' : result
 }
+
+const capName = (name) => {
+  const characters = Array.from(name)
+  const fits = characters.length <= MAX_NAME_CHARS && Buffer.byteLength(name) <= MAX_NAME_BYTES
+  if (fits) return withoutTrailingDotsAndSpaces(name)
+  const kept = characters.slice(0, MAX_NAME_CHARS)
+  while (Buffer.byteLength(kept.join('')) > MAX_NAME_BYTES) kept.pop()
+  return withoutTrailingDotsAndSpaces(kept.join(''))
+}
+
+const capFileName = (fileName) => {
+  const ext = path.extname(fileName)
+  const stem = ext ? fileName.slice(0, -ext.length) : fileName
+  const cappedStem = capName(stem)
+  if (cappedStem === stem) return suffixReservedName(withoutTrailingDotsAndSpaces(fileName) || '_')
+  return suffixReservedName(`${cappedStem || '_'}${ext}`)
+}
+
+const withoutTrailingDotsAndSpaces = (name) => name.replace(/[. ]+$/, '')
+
+const RESERVED_DEVICE_NAME = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?=\s*(?:\.|$))/i
+
+const suffixReservedName = (name) => name.replace(RESERVED_DEVICE_NAME, '$1_')
+
+const isPortableSegment = (segment) =>
+  Boolean(segment)
+  && Buffer.byteLength(segment) <= MAX_FILENAME
+  && withoutTrailingDotsAndSpaces(segment) === segment
+  && !RESERVED_DEVICE_NAME.test(segment)
+
+const isPortableSavedPath = (savedPath) => savedPath.split('/').every(isPortableSegment)
 
 const tsToSeconds = (ts = '0') => {
   if (typeof ts !== 'string') return 0
@@ -2051,11 +2102,13 @@ const ownersBySavedPath = (savedFilesDb) => new Map(
 const isLegacySavedEntry = (entry) =>
   typeof entry === 'string' || (typeof entry === 'object' && entry !== null && typeof entry.path !== 'string')
 
-const chooseSaveTarget = async ({ plannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths }) => {
+const chooseSaveTarget = async ({ plannedPath, legacyPlannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths }) => {
   const itemId = String(item.id)
   const entry = savedFilesDb[item.id]
   const recordedPath = typeof entry?.path === 'string' ? path.resolve(savePath, entry.path) : null
-  const isRecordedCopy = recordedPath && withoutCopySuffix(recordedPath) === plannedPath && !claimedPaths.has(recordedPath)
+  const isRecordedCopy = recordedPath
+    && isRecordedPathFor({ recordedPath, plannedPath, legacyPlannedPath, savedPath: entry.path })
+    && !claimedPaths.has(recordedPath)
   if (isRecordedCopy) return { filePath: recordedPath, takenPath: null }
 
   for (let copy = 1; ; copy++) {
@@ -2068,6 +2121,18 @@ const chooseSaveTarget = async ({ plannedPath, savePath, item, savedFilesDb, own
     if (!(await anyExists([filePath, `${filePath}${PART_SUFFIX}`]))) return { filePath, takenPath }
   }
 }
+
+const isRecordedPathFor = ({ recordedPath, plannedPath, legacyPlannedPath, savedPath }) => {
+  const recordedName = withoutCopySuffix(recordedPath)
+  if (recordedName === plannedPath) return true
+  return recordedName === legacyPlannedPath && isPortableSavedPath(savedPath)
+}
+
+const portableSavedFolders = (savedFilesDb) => new Set(
+  Object.values(savedFilesDb)
+    .filter(entry => typeof entry?.path === 'string' && isPortableSavedPath(entry.path))
+    .map(entry => entry.path.split('/')[0].toLowerCase())
+)
 
 const withCopySuffix = (filePath, copy) => {
   if (copy <= 1) return filePath
@@ -2105,7 +2170,16 @@ const buildDefaultFileBase = ({ recording_title, season_number_padded, episode_n
   return `S${season_number_padded}E${episode_number_padded} - ${recording_title}`
 }
 
-const processPathTemplate = ({ templateString, data }) => {
+const processPathTemplate = ({ templateString, data }) =>
+  toPortablePath(buildTemplatePath({ templateString, data, nameFile: createValidFilename }))
+
+const toPortablePath = (relativePath) => {
+  const segments = relativePath.split(/[\/\\]/)
+  const folders = segments.slice(0, -1).map(toPortableName)
+  return [...folders, capFileName(segments.at(-1))].join(path.sep)
+}
+
+const buildTemplatePath = ({ templateString, data, nameFile }) => {
   debugTemplate('Processing template: %s', templateString)
   debugTemplate('Template data: %O', data)
 
@@ -2129,7 +2203,7 @@ const processPathTemplate = ({ templateString, data }) => {
   }
 
   for (const [placeholder, value] of Object.entries(placeholders)) {
-    const sanitizedValue = value.split(/[\/\\]/).map(part => createValidFilename(part)).join(path.sep)
+    const sanitizedValue = value.split(/[\/\\]/).map(part => nameFile(part)).join(path.sep)
     processedPath = processedPath.replaceAll(placeholder, sanitizedValue)
     debugTemplate('Replaced "%s" with (sanitized) "%s"', placeholder, sanitizedValue)
   }
