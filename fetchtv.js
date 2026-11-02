@@ -709,7 +709,7 @@ const planSave = async ({ show, item, savePath, template, forPlex, overwrite, co
     return { show, item, filePath: savedAt, takenPath: null, alreadySaved: true, partialPath: null }
   }
   claimedPaths.add(target.filePath)
-  const partialPath = await movablePartialFor({ earlierPaths, filePath: target.filePath })
+  const partialPath = await movablePartialFor({ earlierPaths, filePath: target.filePath, savedEntry, item })
   return { show, item, filePath: target.filePath, takenPath: target.takenPath, alreadySaved: false, partialPath }
 }
 
@@ -778,16 +778,23 @@ const firstCompleteCopy = async ({ filePaths, savedEntry, item }) => {
   return null
 }
 
-const movablePartialFor = async ({ earlierPaths, filePath }) => {
+const movablePartialFor = async ({ earlierPaths, filePath, savedEntry, item }) => {
+  if (!isSavedSizeOf({ savedEntry, item })) return null
   if (await anyExists([filePath, `${filePath}${PART_SUFFIX}`])) return null
   for (const earlierPath of earlierPaths) {
     if (earlierPath === filePath) continue
     const partialPath = `${earlierPath}${PART_SUFFIX}`
-    if (!(await anyExists([partialPath]))) continue
+    if (!(await isPartialOf({ partialPath, item }))) continue
     if (await isLockedByAnotherSave(`${earlierPath}${CONST_LOCK}`)) continue
     return partialPath
   }
   return null
+}
+
+const isPartialOf = async ({ partialPath, item }) => {
+  const stats = await fs.stat(partialPath).catch(() => null)
+  if (!stats?.isFile()) return false
+  return !isPositiveSize(item.size) || stats.size <= item.size + SIZE_TOLERANCE
 }
 
 const isLockedByAnotherSave = async (lockFilePath) =>
@@ -890,13 +897,22 @@ const getDownloadStatus = (downloadResult) => {
 
 const isSavedFileComplete = async ({ filePath, savedEntry, item }) => {
   try {
+    if (!isSavedSizeOf({ savedEntry, item })) return false
     const stats = await fs.stat(filePath)
     const expectedSizes = [getSavedEntrySize(savedEntry), item.size].filter(isPositiveSize)
-    return expectedSizes.every(expectedSize => stats.size >= expectedSize - SIZE_TOLERANCE)
+    const isBigEnough = expectedSizes.every(expectedSize => stats.size >= expectedSize - SIZE_TOLERANCE)
+    const isNotTooBig = !isPositiveSize(item.size) || stats.size <= item.size + SIZE_TOLERANCE
+    return isBigEnough && isNotTooBig
   } catch (err) {
     if (err.code !== 'ENOENT') debug('Error checking saved file %s: %O', filePath, err)
     return false
   }
+}
+
+const isSavedSizeOf = ({ savedEntry, item }) => {
+  const savedSize = getSavedEntrySize(savedEntry)
+  if (!isPositiveSize(savedSize) || !isPositiveSize(item.size)) return true
+  return Math.abs(savedSize - item.size) <= SIZE_TOLERANCE
 }
 
 const getSavedEntrySize = (savedEntry) =>
@@ -1837,7 +1853,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, id
         debug('Response stream ended for %s.', item.title)
       })
 
-      stopStreamOnAbort({ signal, responseStream })
+      stopStreamOnAbort({ signal, response })
     })
   } catch (error) {
     if (isResumeTimeoutAtEnd({ error, isResuming, existingSize, item })) {
@@ -1927,12 +1943,13 @@ const untilResponse = async ({ signal }, request) => {
   }
 }
 
-const stopStreamOnAbort = ({ signal, responseStream }) => {
+const stopStreamOnAbort = ({ signal, response }) => {
   if (!signal) return
+  const responseStream = response.data
   const stop = () => {
     if (responseStream.destroyed) return
     responseStream.unpipe()
-    responseStream.destroy(new Error('Save stopped'))
+    dropSilentResponse({ response, error: new Error('Save stopped') })
   }
   if (signal.aborted) return stop()
   signal.addEventListener('abort', stop, { once: true })
@@ -2230,7 +2247,11 @@ const addSavedFile = async ({ savePath, savedFilesDb, item, size, filePath }) =>
 }
 
 const recordSaveStart = async ({ savePath, savedFilesDb, item, filePath }) => {
-  savedFilesDb[item.id] = { title: item.title, ...savedPathField({ savePath, filePath }) }
+  savedFilesDb[item.id] = {
+    title: item.title,
+    ...(isPositiveSize(item.size) && { size: item.size }),
+    ...savedPathField({ savePath, filePath })
+  }
   await writeSavedFiles({ savePath, savedFilesDb })
 }
 
