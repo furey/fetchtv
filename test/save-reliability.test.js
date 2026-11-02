@@ -237,7 +237,7 @@ test('download: a short body is not marked saved and keeps the partial file', as
   assert.equal(result[0].status, 'failed')
   assert.equal(await partSize(item), HALF)
   assert.equal(await exists(filePathFor(item)), false)
-  assert.deepEqual((await readDb())['2'], { title: item.title, path: savedPathFor(item) })
+  assert.deepEqual((await readDb())['2'], { title: item.title, size: item.size, path: savedPathFor(item) })
 })
 
 test('download: a mid-stream reset is not marked saved and keeps the partial file', async () => {
@@ -249,7 +249,7 @@ test('download: a mid-stream reset is not marked saved and keeps the partial fil
   assert.match(result[0].warning, /Download interrupted .* at 50\.0%/)
   assert.equal(result[0].status, 'failed')
   assert.equal(await partSize(item), HALF)
-  assert.deepEqual((await readDb())['3'], { title: item.title, path: savedPathFor(item) })
+  assert.deepEqual((await readDb())['3'], { title: item.title, size: item.size, path: savedPathFor(item) })
 })
 
 test('retry: a mid-stream reset resumes with a Range request in the same run', async () => {
@@ -914,4 +914,64 @@ test('planSaves: reports the recordings a save would skip without writing anythi
   assert.deepEqual(plain.map(plan => plan.alreadySaved), [true, false])
   assert.deepEqual(again.map(plan => plan.alreadySaved), [false, false])
   assert.equal(await exists(path.join(tmpDir, 'Bluey', 'Season 01')), false)
+})
+
+test('cancel: stopping a save while the box is silent ends it at once', async () => {
+  const item = makeItem({ id: '80', route: '/silent-then-resume' })
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 200)
+  const startedAt = Date.now()
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: FAST_RETRIES, signal: controller.signal }))
+
+  assert.equal(result[0].status, 'cancelled')
+  assert.ok(Date.now() - startedAt < 5000)
+  assert.equal(await partSize(item), HALF)
+})
+
+test('naming change: does not skip a same-title file whose saved size differs from the listing', async () => {
+  const item = makeItem({ id: '81', route: '/full' })
+  const bigger = Buffer.alloc(BODY.length + 4 * 1024)
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(filePathFor(item), bigger)
+  await writeDb({ 81: { title: item.title, size: bigger.length, path: savedPathFor(item) } })
+
+  const plans = await planSaves({ recordings: makeRecordings([item]), savePath: tmpDir, forPlex: true })
+
+  assert.equal(plans[0].alreadySaved, false)
+})
+
+test('naming change: does not skip a same-title file bigger than the listing when the entry has no size', async () => {
+  const item = makeItem({ id: '82', route: '/full' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(filePathFor(item), Buffer.alloc(BODY.length * 2))
+  await writeDb({ 82: { title: item.title, path: savedPathFor(item) } })
+
+  const plans = await planSaves({ recordings: makeRecordings([item]), savePath: tmpDir, forPlex: true })
+
+  assert.equal(plans[0].alreadySaved, false)
+})
+
+test('naming change: leaves a .part file alone when the saved size belongs to another recording', async () => {
+  const item = makeItem({ id: '83', route: '/full' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(`${filePathFor(item)}.part`, BODY.subarray(0, HALF))
+  await writeDb({ 83: { title: item.title, size: BODY.length * 2, path: savedPathFor(item) } })
+
+  const { result } = await saveForPlex({ items: [item] })
+
+  assert.equal(result[0].status, 'saved')
+  assert.equal(result[0].resumed, false)
+  assert.equal(await partSize(item), HALF)
+  assert.deepEqual(requestsFor('/full').map(entry => entry.start), [null])
+})
+
+test('save start: records the listing size with the path', async () => {
+  const item = makeItem({ id: '84', route: '/silent-then-resume' })
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 200)
+  await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES, signal: controller.signal }))
+
+  assert.deepEqual((await readDb())['84'], { title: item.title, size: BODY.length, path: savedPathFor(item) })
 })
