@@ -124,3 +124,12 @@ test('processPathTemplate: keeps the spacing of a folder named in the template',
   })
   assert.equal(result, path.join('My  Shows', 'Bluey', 'S1 E2 - Hospital.ts'))
 })
+
+test('processPathTemplate: a blank show title gives a "_" folder, not an empty one', () => {
+  const result = processPathTemplate({
+    templateString: '${show_title}/${recording_title}.${ext}',
+    data: { ...baseData, show_title: '   ' },
+  })
+  assert.equal(result, path.join('_', 'S1 E2 - Hospital.ts'))
+  assert.ok(result.split(path.sep).every(Boolean))
+})

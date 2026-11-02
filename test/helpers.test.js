@@ -254,3 +254,16 @@ test('createValidFilename: leaves names that were already valid unchanged', () =
   const before = (name) => String(name).replace(/[<>:"/\\|?*\x00-\x1F]/g, '').replace(/\s+/g, ' ').trim().slice(0, 245)
   for (const name of names) assert.equal(createValidFilename(name), before(name))
 })
+
+test('createValidFilename: cuts long names between whole characters', () => {
+  assert.equal(createValidFilename(`${'a'.repeat(119)}é`), 'a'.repeat(119))
+  assert.equal(createValidFilename(`${'a'.repeat(119)}🇦🇺`), 'a'.repeat(119))
+  assert.equal(createValidFilename(`${'a'.repeat(115)}👨‍👩‍👧‍👦`), 'a'.repeat(115))
+  assert.equal(createValidFilename(`${'a'.repeat(110)}👨‍👩‍👧‍👦${'b'.repeat(20)}`), `${'a'.repeat(110)}👨‍👩‍👧‍👦${'b'.repeat(3)}`)
+})
+
+test('createValidFilename: gives "_" for a name with nothing usable left', () => {
+  assert.equal(createValidFilename('   '), '_')
+  assert.equal(createValidFilename('???'), '_')
+  assert.equal(createValidFilename(''), '')
+})

@@ -756,3 +756,23 @@ test('portable names: a long template name saved before the cap keeps its name a
   assert.equal(result[0].status, 'already_saved')
   assert.deepEqual(requestsFor('/full'), [])
 })
+
+const SHOW_FOLDER_TEMPLATE = '${show_title}/${recording_title}.${ext}'
+
+const saveWithTemplate = (showTitle, items) => silenceConsole(() =>
+  saveRecordings({ recordings: [{ title: showTitle, items }], savePath: tmpDir, template: SHOW_FOLDER_TEMPLATE, retryDelays: NO_RETRIES }))
+
+test('portable names: a template keeps new episodes in a folder that already holds saved files', async () => {
+  await writeForeign(path.join(tmpDir, 'Wait_', 'S1 E70 - Test.ts'))
+  await writeDb({ 70: { title: 'S1 E70 - Test', size: FOREIGN.length, path: 'Wait_/S1 E70 - Test.ts' } })
+  await saveWithTemplate('Wait...', [makeItem({ id: '71', route: '/full' })])
+
+  assert.ok(await exists(path.join(tmpDir, 'Wait_', 'S1 E71 - Test.ts')))
+  assert.equal(await exists(path.join(tmpDir, 'Wait')), false)
+})
+
+test('portable names: a template uses the new folder name when nothing is saved in the old one', async () => {
+  await saveWithTemplate('Wait...', [makeItem({ id: '72', route: '/full' })])
+
+  assert.ok(await exists(path.join(tmpDir, 'Wait', 'S1 E72 - Test.ts')))
+})

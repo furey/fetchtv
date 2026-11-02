@@ -286,7 +286,7 @@ The default name gets an `SxxEyy -` prefix when the season and episode are known
 - It cuts a show or recording title to `120` characters (`240` bytes), and keeps the `SxxEyy` part and the extension. With a typical save folder, the full path then stays under the Windows limit of `260` characters.
 - It keeps letters with accents and other non-English characters.
 
-A recording that `fetchtv` saved before these rules keeps its name, so `fetchtv` still skips it or resumes it. A long show folder that already holds saved files also stays in use. Only names that Windows cannot open change.
+A recording that `fetchtv` saved before these rules keeps its name, so `fetchtv` still skips it or resumes it. A show folder or `--template` folder that already holds saved files also stays in use for new recordings. Only names that Windows cannot open change. A title with nothing usable left (only spaces or removed characters) becomes `_`.
 
 ### Example templates
 

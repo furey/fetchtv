@@ -495,9 +495,14 @@ const saveRecordings = async ({
         }
       } else if (template) {
         try {
-          const relativePath = processPathTemplate({ templateString: template, data: templateData })
+          const legacyRelativePath = buildTemplatePath({ templateString: template, data: templateData, nameFile: createLegacyFilename })
+          const relativePath = withSavedTemplateFolders({
+            relativePath: processPathTemplate({ templateString: template, data: templateData }),
+            legacyRelativePath,
+            savedFolders
+          })
           plannedPath = path.resolve(savePath, relativePath)
-          legacyPlannedPath = path.resolve(savePath, buildTemplatePath({ templateString: template, data: templateData, nameFile: createLegacyFilename }))
+          legacyPlannedPath = path.resolve(savePath, legacyRelativePath)
         } catch (err) {
           logWarning(`${err.message} Using the default name for ${item.title}.`)
           plannedPath = defaultFilePath()
@@ -1976,8 +1981,8 @@ const formatItem = (item) => ({
 })
 
 const createValidFilename = (filename = '') => {
-  const cleaned = cleanFilename(filename)
-  return cleaned && toPortableName(cleaned)
+  if (!_.toString(filename)) return ''
+  return toPortableName(cleanFilename(filename))
 }
 
 const toPortableName = (name) => suffixReservedName(capName(name) || '_')
@@ -1995,13 +2000,19 @@ const cleanFilename = (filename) => {
 }
 
 const capName = (name) => {
-  const characters = Array.from(name)
-  const fits = characters.length <= MAX_NAME_CHARS && Buffer.byteLength(name) <= MAX_NAME_BYTES
-  if (fits) return withoutTrailingDotsAndSpaces(name)
-  const kept = characters.slice(0, MAX_NAME_CHARS)
-  while (Buffer.byteLength(kept.join('')) > MAX_NAME_BYTES) kept.pop()
+  if (fitsNameLimits(name)) return withoutTrailingDotsAndSpaces(name)
+  const kept = []
+  for (const { segment } of graphemeSegmenter.segment(name)) {
+    if (!fitsNameLimits([...kept, segment].join(''))) break
+    kept.push(segment)
+  }
   return withoutTrailingDotsAndSpaces(kept.join(''))
 }
+
+const fitsNameLimits = (name) =>
+  Array.from(name).length <= MAX_NAME_CHARS && Buffer.byteLength(name) <= MAX_NAME_BYTES
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
 const capFileName = (fileName) => {
   const ext = path.extname(fileName)
@@ -2131,8 +2142,25 @@ const isRecordedPathFor = ({ recordedPath, plannedPath, legacyPlannedPath, saved
 const portableSavedFolders = (savedFilesDb) => new Set(
   Object.values(savedFilesDb)
     .filter(entry => typeof entry?.path === 'string' && isPortableSavedPath(entry.path))
-    .map(entry => entry.path.split('/')[0].toLowerCase())
+    .flatMap(entry => folderPrefixesOf(entry.path.toLowerCase()))
 )
+
+const folderPrefixesOf = (savedPath) => {
+  const folders = savedPath.split('/').slice(0, -1)
+  return folders.map((_folder, index) => folders.slice(0, index + 1).join('/'))
+}
+
+const withSavedTemplateFolders = ({ relativePath, legacyRelativePath, savedFolders }) => {
+  const segments = relativePath.split(path.sep)
+  const legacySegments = legacyRelativePath.split(path.sep)
+  if (segments.length !== legacySegments.length) return relativePath
+  const chosen = []
+  segments.slice(0, -1).forEach((segment, index) => {
+    const legacyPrefix = [...chosen, legacySegments[index]].join('/').toLowerCase()
+    chosen.push(savedFolders.has(legacyPrefix) ? legacySegments[index] : segment)
+  })
+  return [...chosen, segments.at(-1)].join(path.sep)
+}
 
 const withCopySuffix = (filePath, copy) => {
   if (copy <= 1) return filePath
