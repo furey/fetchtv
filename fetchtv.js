@@ -699,7 +699,7 @@ const planSave = async ({ show, item, savePath, template, forPlex, overwrite, co
   const { plannedPath, legacyPlannedPath } = await plannedPathsFor({ item, savePath, template, forPlex, templateData, showTitle: show.title, warn, listFoldersOf, savedFolders })
   const target = await chooseSaveTarget({ plannedPath, legacyPlannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths })
   const savedEntry = overwrite ? undefined : savedFilesDb[item.id]
-  const earlierPaths = savedEntry
+  const earlierPaths = savedEntry && isSameTitle(savedTitleOf(savedEntry), item.title)
     ? earlierCopyPaths({ savePath, savedEntry, legacyPaths: [legacyPlannedPath, legacyDefaultPath({ savePath, show, templateData })] })
     : []
   const checkedPaths = copyAgain ? [target.filePath] : [target.filePath, ...earlierPaths]
@@ -751,6 +751,10 @@ const plannedPathsFor = async ({ item, savePath, template, forPlex, templateData
     return { plannedPath: defaultFilePath(), legacyPlannedPath }
   }
 }
+
+const savedTitleOf = (savedEntry) => (typeof savedEntry === 'string' ? savedEntry : savedEntry?.title)
+
+const isSameTitle = (savedTitle, title) => cleanFilename(savedTitle ?? '') === cleanFilename(title ?? '')
 
 const legacyDefaultPath = ({ savePath, show, templateData }) =>
   path.join(savePath, createLegacyFilename(show.title), `${createLegacyFilename(buildDefaultFileBase(templateData))}.${templateData.ext}`)

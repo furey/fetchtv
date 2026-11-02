@@ -861,6 +861,18 @@ test('naming change: moves a recorded .part file to the new name and resumes it'
   assert.equal((await readDb())['72'].path, 'Bluey/Season 01/Bluey - S01E72.ts')
 })
 
+test('naming change: does not skip when the saved entry under the same id has another title', async () => {
+  const item = makeItem({ id: '77', route: '/full' })
+  const other = makeItem({ id: '78', route: '/full', title: 'S1 E78 - Other' })
+  await writePartial(other, BODY.length)
+  await writeDb({ 77: { title: other.title, size: BODY.length, path: savedPathFor(other) } })
+
+  const { result } = await saveForPlex({ items: [item] })
+
+  assert.equal(result[0].status, 'saved')
+  assert.ok((await fs.readFile(plexPathFor(item))).equals(BODY))
+})
+
 test('copyAgain: saves a second copy under the new naming', async () => {
   const item = makeItem({ id: '73', route: '/full' })
   await writePartial(item, BODY.length)
