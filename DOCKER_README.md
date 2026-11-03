@@ -68,15 +68,16 @@ docker run --rm furey/fetchtv recordings --ip 192.168.1.20
 
 ## Common flags
 
-| Flag            | Purpose                                                |
-| --------------- | ------------------------------------------------------ |
-| `--ip <addr>`   | Target a specific Fetch TV IP, skip discovery          |
-| `--port <num>`  | Fetch TV port (default `49152`)                        |
-| `--show <name>` | Filter to show titles containing the text (repeatable) |
-| `--for-plex`    | Save as `Show/Season 01/Show - S01E02.ts`              |
-| `--save <path>` | Output directory for downloads                         |
-| `--overwrite`   | Save again over files fetchtv saved earlier            |
-| `--debug`       | Verbose UPnP/SSDP logs                                 |
+| Flag                   | Purpose                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| `--ip <addr>`          | Target a specific Fetch TV IP, skip discovery                                      |
+| `--port <num>`         | Fetch TV port (default `49152`)                                                    |
+| `--show <name>`        | Filter to show titles containing the text (repeatable)                             |
+| `--for-plex`           | Save as `Show/Season 01/Show - S01E02.ts`                                          |
+| `--save <path>`        | Output directory for downloads                                                     |
+| `--overwrite`          | Save again over files fetchtv saved earlier                                        |
+| `--box-wait <minutes>` | Wait for the box to answer again if it stops answering during a save (default `0`) |
+| `--debug`              | Verbose UPnP/SSDP logs                                                             |
 
 Full CLI reference, path-template variables, and the programmatic ESM API are documented in the [GitHub README](https://github.com/furey/fetchtv#readme).
 

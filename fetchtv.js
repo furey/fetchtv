@@ -919,9 +919,10 @@ const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite,
       retries++
       isSpentRetry = true
       log(chalk.yellow(`Retrying ${item.title} in ${formatSeconds(delay)} (attempt ${retries + 1} of ${maxAttempts})…`))
-      onRetry({ id: item.id, attempt: retries + 1, of: maxAttempts })
+      callSafely(onRetry, { id: item.id, attempt: retries + 1, of: maxAttempts })
       await waitUnlessAborted({ delay, signal })
-      const verdict = signal?.aborted ? null : await boxWatch?.untilAnswering()
+      if (signal?.aborted) return { ...result, retryable: false, cancelled: true, attempts: retries + 1 }
+      const verdict = await boxWatch?.untilAnswering()
       if (signal?.aborted || (verdict && verdict !== BOX_STATE.BACK)) return heldItemResult({ verdict, item, result, attempts: retries + 1 })
     } else {
       break
@@ -930,6 +931,14 @@ const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite,
   }
 
   return { ...result, attempts: retries + 1 }
+}
+
+const callSafely = (callback, payload) => {
+  try {
+    callback(payload)
+  } catch (error) {
+    debug('A save callback threw: %O', error)
+  }
 }
 
 const isBoxOutage = ({ result, item, boxWatch, outages }) =>
@@ -968,7 +977,7 @@ const createBoxWatch = ({ boxWaitMs, probeDelays, probeTimeout, connectTimeout, 
 
   const announce = (state) => {
     log(chalk.yellow(BOX_STATE_MESSAGES[state]({ boxWaitMs })))
-    onBoxState({ state })
+    callSafely(onBoxState, { state })
   }
 
   const runOutage = async (url) => {
