@@ -111,6 +111,14 @@ const routes = {
     res.writeHead(200, { 'Content-Length': String(BODY.length + FETCH_BOX_OVERSTATEMENT) })
     res.write(BODY)
   },
+  '/range-not-satisfiable-no-content-range': ({ res, start }) => {
+    if (start !== null) {
+      res.writeHead(416, { SERVER: 'Linux/4.1.20-1.9, UPnP/1.0, DLNADOC/1.50', CONNECTION: 'close' })
+      return res.end()
+    }
+    res.writeHead(200, { 'Content-Length': String(BODY.length) })
+    res.end(BODY)
+  },
   '/range-not-satisfiable': ({ res, start }) => {
     if (start !== null) return sendRangeNotSatisfiable(res)
     res.writeHead(200, { 'Content-Length': String(BODY.length) })
@@ -317,6 +325,32 @@ test('fetch box: a 416 to the resume of a complete partial file saves it', async
   assert.deepEqual(requestsFor('/range-not-satisfiable').map(entry => entry.start), [BODY.length])
   assert.equal((await readDb())[item.id].size, BODY.length)
   assert.equal(await exists(`${filePathFor(item)}.part`), false)
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+})
+
+test('fetch box: a 416 with no Content-Range, as the real box sends, saves a partial file at the listed size', async () => {
+  const item = makeItem({ id: '45', route: '/range-not-satisfiable-no-content-range' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(`${filePathFor(item)}.part`, BODY)
+  await writeDb({ [item.id]: { title: item.title, path: savedPathFor(item) } })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.deepEqual(requestsFor('/range-not-satisfiable-no-content-range').map(entry => entry.start), [BODY.length])
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+})
+
+test('fetch box: a 416 with no Content-Range to the resume of a short partial file starts again', async () => {
+  const item = makeItem({ id: '46', route: '/range-not-satisfiable-no-content-range' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(`${filePathFor(item)}.part`, BODY.subarray(0, HALF))
+  await writeDb({ [item.id]: { title: item.title, path: savedPathFor(item) } })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: FAST_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.deepEqual(requestsFor('/range-not-satisfiable-no-content-range').map(entry => entry.start), [HALF, null])
   assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
 })
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import nock from 'nock'
 
-import { getFetchRecordings, LISTING_OUTCOME } from '../fetchtv.js'
+import { getFetchRecordings, parseLocations, LISTING_OUTCOME } from '../fetchtv.js'
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const readFixture = (name) => readFileSync(path.join(fixturesDir, name), 'utf-8')
@@ -25,6 +25,8 @@ const location = {
   },
 }
 
+const BOX_HEADERS = { SERVER: 'Linux/4.1.20-1.9, UPnP/1.0, DLNADOC/1.50', CONNECTION: 'close' }
+
 const objectIdOf = (body) => String(body).match(/<ObjectID>([^<]+)<\/ObjectID>/)?.[1]
 
 const serveBrowse = (replies) => {
@@ -33,7 +35,9 @@ const serveBrowse = (replies) => {
     .times(Infinity)
     .reply((_uri, body) => {
       const reply = replies[objectIdOf(body)] ?? 'browse-empty.xml'
-      return reply === 500 ? [500, 'Internal Server Error'] : [200, readFixture(reply)]
+      if (reply === 500) return [500, 'Internal Server Error']
+      if (reply === 501) return [500, readFixture('upnp-error-501.xml'), BOX_HEADERS]
+      return [200, readFixture(reply)]
     })
 }
 
@@ -112,4 +116,49 @@ test('listing outcome: some show browses fail, the rest still list', async () =>
   const { shows, outcomes } = await listWithOutcome()
   assert.deepEqual(shows.map(show => show.id), [10, 12])
   assert.deepEqual(outcomes, [{ outcome: 'ok' }])
+})
+
+test('listing outcome: a show the box no longer has is skipped at once, and the rest still list', async () => {
+  let goneBrowses = 0
+  nock(HOST)
+    .post(CONTROL_PATH)
+    .times(Infinity)
+    .reply((_uri, body) => {
+      const objectId = objectIdOf(body)
+      if (objectId === '11') goneBrowses++
+      if (objectId === '11') return [500, readFixture('upnp-error-501.xml'), BOX_HEADERS]
+      return [200, readFixture({ 0: 'browse-root.xml', 1: 'browse-recordings.xml' }[objectId] ?? 'browse-show-items.xml')]
+    })
+  const startedAt = Date.now()
+  const { shows, outcomes } = await listWithOutcome()
+  assert.deepEqual(shows.map(show => show.id), [10, 12])
+  assert.deepEqual(outcomes, [{ outcome: 'ok' }])
+  assert.equal(goneBrowses, 1)
+  assert.ok(Date.now() - startedAt < 1000)
+})
+
+test('listing outcome: every show gone lists no shows, not a failed browse', async () => {
+  serveBrowse({ 0: 'browse-root.xml', 1: 'browse-recordings.xml', 10: 501, 11: 501, 12: 501 })
+  const { shows, outcomes } = await listWithOutcome()
+  assert.deepEqual(shows, [])
+  assert.deepEqual(outcomes, [{ outcome: 'ok' }])
+})
+
+test('listing outcome: a cancelled box, from the real captures, lists an empty Recordings folder', async () => {
+  const BOX = 'http://192.168.86.224:49152'
+  nock(BOX).get('/MediaServer.xml').reply(200, readFixture('cancelled-media-server.xml'), { 'CONTENT-TYPE': 'text/xml; charset="utf-8"', ...BOX_HEADERS })
+  nock(BOX)
+    .post('/web/cds_control')
+    .times(Infinity)
+    .reply((_uri, body) => {
+      const objectId = objectIdOf(body)
+      if (objectId === '0') return [200, readFixture('cancelled-browse-root.xml'), BOX_HEADERS]
+      if (objectId === '1' || objectId === '2') return [200, readFixture('cancelled-browse-empty.xml'), BOX_HEADERS]
+      return [500, readFixture('upnp-error-501.xml'), BOX_HEADERS]
+    })
+  const [boxLocation] = await parseLocations([`${BOX}/MediaServer.xml`])
+  assert.equal(boxLocation.manufacturerURL, 'http://www.fetch.com/')
+  const { shows, outcomes } = await listWithOutcome(boxLocation)
+  assert.deepEqual(shows, [])
+  assert.deepEqual(outcomes, [{ outcome: LISTING_OUTCOME.EMPTY }])
 })
