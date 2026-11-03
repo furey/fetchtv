@@ -137,6 +137,28 @@ test('listing outcome: a show the box no longer has is skipped at once, and the 
   assert.ok(Date.now() - startedAt < 1000)
 })
 
+test('listing outcome: a show the box answers with UPnP error 701, no such object, is skipped at once', async () => {
+  const noSuchObject = readFixture('upnp-error-501.xml')
+    .replace('<errorCode>501</errorCode>', '<errorCode>701</errorCode>')
+    .replace('Action Failed', 'No such object')
+  let goneBrowses = 0
+  nock(HOST)
+    .post(CONTROL_PATH)
+    .times(Infinity)
+    .reply((_uri, body) => {
+      const objectId = objectIdOf(body)
+      if (objectId === '11') goneBrowses++
+      if (objectId === '11') return [500, noSuchObject, BOX_HEADERS]
+      return [200, readFixture({ 0: 'browse-root.xml', 1: 'browse-recordings.xml' }[objectId] ?? 'browse-show-items.xml')]
+    })
+  const startedAt = Date.now()
+  const { shows, outcomes } = await listWithOutcome()
+  assert.deepEqual(shows.map(show => show.id), [10, 12])
+  assert.deepEqual(outcomes, [{ outcome: 'ok' }])
+  assert.equal(goneBrowses, 1)
+  assert.ok(Date.now() - startedAt < 1000)
+})
+
 test('listing outcome: every show gone lists no shows, not a failed browse', async () => {
   serveBrowse({ 0: 'browse-root.xml', 1: 'browse-recordings.xml', 10: 501, 11: 501, 12: 501 })
   const { shows, outcomes } = await listWithOutcome()
