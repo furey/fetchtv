@@ -568,6 +568,8 @@ Tests use Node's built-in `node:test` runner (no external framework) and [`nock`
 | `save-events.test.js`         | `onProgress` / `onResult` events from `saveRecordings`, and stopping a save with an `AbortSignal`: the partial file stays, the lock goes, and the next run resumes                                                                                                                                                                                                                          |
 | `commands.test.js`            | Spawned CLI: `info` / `recordings` / `shows`, prefix-matched commands, `--show` / `--exclude` / `--title`, `--is-recording`, `--json`, `--for-plex`                                                                                                                                                                                                                                         |
 
+Development: `scripts/capture-social.mjs` regenerates `docs/img/social-preview.png`; it needs a sibling checkout of [fetch-my-recordings](https://github.com/furey/fetch-my-recordings) (or `FMR_ROOT` set to its path) for the fake Fetch box and fonts.
+
 ## GitHub workflows
 
 - [Workflows overview](#workflows-overview)
