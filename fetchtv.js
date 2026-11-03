@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import fsc from 'fs'
+import net from 'net'
+import http from 'http'
 import ora from 'ora'
 import _ from 'lodash'
 import path from 'path'
@@ -52,11 +54,20 @@ const FETCH_MANUFACTURER_URL = 'http://www.fetch.com/'
 const SIZE_TOLERANCE = 1024
 const RANGE_NOT_SATISFIABLE = 416
 const RESUME_TIMEOUT = REQUEST_TIMEOUT * 2
+const BODY_IDLE_TIMEOUT = 60000
+const BOX_SILENT_CODE = 'EBOXSILENT'
 const UNPAUSED_TAIL_BYTES = 32 * 1024 * 1024
 const MIN_CONCURRENT_DOWNLOADS = 1
 const MAX_CONCURRENT_DOWNLOADS = 10
 const DEFAULT_CONCURRENT_DOWNLOADS = 2
 const DOWNLOAD_RETRY_DELAYS = [5000, 15000]
+const CONNECT_TIMEOUT = 10000
+const BOX_PROBE_TIMEOUT = 5000
+const BOX_PROBE_DELAYS = [5000, 5000, 10000, 30000]
+const MAX_BOX_OUTAGES = 3
+const FLOWING_STREAM_WINDOW = 60000
+const BOX_UNREACHABLE = 'box-unreachable'
+const BOX_LEVEL_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'EHOSTDOWN', 'ENETUNREACH', 'ENETDOWN', 'EADDRNOTAVAIL', 'ETIMEDOUT'])
 const UPNP_CONTENT_DIRECTORY_URN = 'urn:schemas-upnp-org:service:ContentDirectory:1'
 
 const REQUEST_QUEUE_PRIORITY = {
@@ -65,6 +76,12 @@ const REQUEST_QUEUE_PRIORITY = {
   SHOW: 2,
   RECORDING_CHECK: 3
 }
+
+const BOX_STATE = Object.freeze({
+  LOST: 'lost',
+  BACK: 'back',
+  GAVE_UP: 'gave-up'
+})
 
 const SAVE_STATUS = {
   SAVED: 'saved',
@@ -124,11 +141,13 @@ const main = async () => {
     .option('for-plex', { type: 'boolean', default: false, description: 'Save as Show/Season 01/Show - S01E02.ext, the Plex and Freetvarr layout (overrides --template)' })
     .option('overwrite', { type: 'boolean', default: false, description: 'Save again over files that fetchtv saved earlier (never over other files)' })
     .option('concurrency', { type: 'number', default: DEFAULT_CONCURRENT_DOWNLOADS, description: `Number of recordings to save at the same time (${MIN_CONCURRENT_DOWNLOADS}-${MAX_CONCURRENT_DOWNLOADS})` })
+    .option('box-wait', { type: 'number', default: 0, description: 'Minutes to wait for the box to answer again if it stops answering during a save, e.g. after standby or a restart (0: no wait)' })
     .option('json', { type: 'boolean', default: false, description: 'Output show/recording/save results in JSON' })
     .option('debug', { type: 'boolean', default: false, description: 'Enable verbose logging for debugging'})
     .check(argv => {
-      if (isValidConcurrency(argv.concurrency)) return true
-      throw new Error(`--concurrency must be a whole number from ${MIN_CONCURRENT_DOWNLOADS} to ${MAX_CONCURRENT_DOWNLOADS}.`)
+      if (!isValidConcurrency(argv.concurrency)) throw new Error(`--concurrency must be a whole number from ${MIN_CONCURRENT_DOWNLOADS} to ${MAX_CONCURRENT_DOWNLOADS}.`)
+      if (!isValidBoxWait(argv.boxWait)) throw new Error('--box-wait must be a number of minutes, 0 or more.')
+      return true
     })
     .help()
     .alias('h', 'help')
@@ -193,6 +212,7 @@ const main = async () => {
         forPlex,
         overwrite: argv.overwrite,
         concurrency: argv.concurrency,
+        boxWaitMs: argv.boxWait * 60000,
         jsonOutput: argv.json
       })
     }
@@ -483,17 +503,27 @@ const saveRecordings = async ({
   template,
   forPlex = false,
   overwrite,
+  copyAgain = false,
   concurrency = DEFAULT_CONCURRENT_DOWNLOADS,
   retryDelays = DOWNLOAD_RETRY_DELAYS,
+  idleTimeout = BODY_IDLE_TIMEOUT,
+  connectTimeout = CONNECT_TIMEOUT,
+  headerTimeout,
+  boxWaitMs = 0,
+  probeDelays = BOX_PROBE_DELAYS,
+  probeTimeout = BOX_PROBE_TIMEOUT,
+  flowingWindow = FLOWING_STREAM_WINDOW,
   onProgress,
   onResult,
+  onBoxState = () => {},
+  onRetry = () => {},
   signal
 }) => {
+  const boxWatch = boxWaitMs > 0
+    ? createBoxWatch({ boxWaitMs, probeDelays, probeTimeout, connectTimeout, flowingWindow, onBoxState, signal })
+    : null
   const savedFilesDb = await loadSavedFiles(savePath)
-  const listFoldersOf = createFolderLister()
-  const ownerByPath = ownersBySavedPath(savedFilesDb)
-  const savedFolders = portableSavedFolders(savedFilesDb)
-  const claimedPaths = new Set()
+  const plans = await planEachSave({ recordings, savePath, template, forPlex, overwrite, copyAgain, savedFilesDb, warn: logWarning })
   const jsonResults = []
   const tasks = []
   const addResult = (result) => {
@@ -501,116 +531,60 @@ const saveRecordings = async ({
     if (onResult) onResult(result)
   }
 
-  for (const show of recordings) {
-    if (!show.items || show.items.length === 0) continue
+  for (const { show, item, filePath, takenPath, alreadySaved, partialPath } of plans) {
+    if (takenPath) {
+      log(chalk.yellow(`${path.relative(savePath, takenPath)} already exists and fetchtv did not save it. Saving as ${path.basename(filePath)} instead.`))
+    }
+    const showDirPath = path.dirname(filePath)
+    const lockFilePath = `${filePath}${CONST_LOCK}`
 
-    for (const item of show.items) {
-      let filePath
-      let showDirPath
-      const templateData = {
-        show_title: show.title,
-        recording_title: item.title,
-        season_number: item.season_number || '',
-        season_number_padded: item.season_number_padded || '',
-        episode_number: item.episode_number || '',
-        episode_number_padded: item.episode_number_padded || '',
-        ext: item.ext || 'ts'
-      }
-
-      const showFolder = existingFolderFor({ title: show.title, folders: await listFoldersOf(savePath), savedFolders })
-        || createValidFilename(show.title)
-
-      const defaultFilePath = (nameFile = createValidFilename) => {
-        const itemFileName = `${nameFile(buildDefaultFileBase(templateData))}.${templateData.ext}`
-        return path.join(savePath, showFolder, itemFileName)
-      }
-
-      let plannedPath
-      let legacyPlannedPath = defaultFilePath(createLegacyFilename)
-      if (forPlex) {
-        plannedPath = await plexFilePath({ savePath, showFolder, templateData, listFoldersOf })
-        if (plannedPath) legacyPlannedPath = null
-        if (!plannedPath) {
-          logWarning(`${item.title} has no season and episode number. Using the default name for it.`)
-          plannedPath = defaultFilePath()
-        }
-      } else if (template) {
+    let lockStillExistsAfterCheck = false
+    if (fsc.existsSync(lockFilePath)) {
+      const isStale = await isLockFileStale(lockFilePath)
+      if (isStale) {
+        log(chalk.yellow(`Removing stale lock file for ${item.title}`))
         try {
-          const legacyRelativePath = buildTemplatePath({ templateString: template, data: templateData, nameFile: createLegacyFilename })
-          const relativePath = withSavedTemplateFolders({
-            relativePath: processPathTemplate({ templateString: template, data: templateData }),
-            legacyRelativePath,
-            savedFolders
-          })
-          plannedPath = path.resolve(savePath, relativePath)
-          legacyPlannedPath = path.resolve(savePath, legacyRelativePath)
+          fsc.unlinkSync(lockFilePath)
+          debug('Removed stale lock file: %s', lockFilePath)
+          lockStillExistsAfterCheck = false
         } catch (err) {
-          logWarning(`${err.message} Using the default name for ${item.title}.`)
-          plannedPath = defaultFilePath()
-        }
-      } else {
-        plannedPath = defaultFilePath()
-      }
-
-      const target = await chooseSaveTarget({ plannedPath, legacyPlannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths })
-      filePath = target.filePath
-      claimedPaths.add(filePath)
-      if (target.takenPath) {
-        log(chalk.yellow(`${path.relative(savePath, target.takenPath)} already exists and fetchtv did not save it. Saving as ${path.basename(filePath)} instead.`))
-      }
-      showDirPath = path.dirname(filePath)
-      const lockFilePath = `${filePath}${CONST_LOCK}`
-
-      let lockStillExistsAfterCheck = false
-      if (fsc.existsSync(lockFilePath)) {
-        const isStale = await isLockFileStale(lockFilePath)
-        if (isStale) {
-          log(chalk.yellow(`Removing stale lock file for ${item.title}`))
-          try {
-            fsc.unlinkSync(lockFilePath)
-            debug('Removed stale lock file: %s', lockFilePath)
-            lockStillExistsAfterCheck = false
-          } catch (err) {
-            debug('Error removing stale lock file: %O', err)
-            logWarning(`Failed to remove stale lock file for ${item.title}, skipping item.`)
-            lockStillExistsAfterCheck = true
-          }
-        } else {
+          debug('Error removing stale lock file: %O', err)
+          logWarning(`Failed to remove stale lock file for ${item.title}, skipping item.`)
           lockStillExistsAfterCheck = true
         }
       } else {
-        lockStillExistsAfterCheck = false
+        lockStillExistsAfterCheck = true
       }
-
-      if (lockStillExistsAfterCheck) {
-        log(chalk.gray(`Skipping ${item.title} (lock file exists or failed to remove stale lock).`))
-        addResult({
-          item: formatItem(item),
-          recorded: false,
-          status: SAVE_STATUS.LOCKED,
-          warning: 'Skipped (lock file active or stale lock removal failed)'
-        })
-        continue
-      }
-
-      const savedEntry = savedFilesDb[item.id]
-      if (savedEntry && !overwrite) {
-        const isComplete = await isSavedFileComplete({ filePath, savedEntry, item })
-        if (isComplete) {
-          log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
-          addResult({
-            item: formatItem(item),
-            recorded: false,
-            status: SAVE_STATUS.ALREADY_SAVED,
-            warning: 'Skipped (already saved and complete)'
-          })
-          continue
-        }
-        log(chalk.yellow(`Saved file is missing or incomplete, saving again: ${show.title} / ${item.title}`))
-      }
-
-      tasks.push({ item, filePath, showDirPath, showTitle: show.title })
+    } else {
+      lockStillExistsAfterCheck = false
     }
+
+    if (lockStillExistsAfterCheck) {
+      log(chalk.gray(`Skipping ${item.title} (lock file exists or failed to remove stale lock).`))
+      addResult({
+        item: formatItem(item),
+        recorded: false,
+        status: SAVE_STATUS.LOCKED,
+        warning: 'Skipped (lock file active or stale lock removal failed)'
+      })
+      continue
+    }
+
+    if (alreadySaved) {
+      log(chalk.gray(`Skipping already saved: ${show.title} / ${item.title}`))
+      addResult({
+        item: formatItem(item),
+        recorded: false,
+        status: SAVE_STATUS.ALREADY_SAVED,
+        warning: 'Skipped (already saved and complete)'
+      })
+      continue
+    }
+    if (savedFilesDb[item.id] && !overwrite) {
+      log(chalk.yellow(`Saved file is missing or incomplete, saving again: ${show.title} / ${item.title}`))
+    }
+
+    tasks.push({ item, filePath, showDirPath, showTitle: show.title, partialPath })
   }
 
   if (tasks.length === 0) {
@@ -642,8 +616,15 @@ const saveRecordings = async ({
       continue
     }
 
+    if (task.partialPath) await movePartialTo({ savePath, partialPath: task.partialPath, filePath: task.filePath })
+
     while (activePromises.size >= concurrency) {
       await Promise.race(activePromises)
+    }
+
+    if (boxWatch && await boxWatch.untilAnswering() === BOX_STATE.GAVE_UP) {
+      addResult(boxUnreachableResult(task.item))
+      continue
     }
 
     if (signal?.aborted) {
@@ -659,7 +640,7 @@ const saveRecordings = async ({
       await recordSaveStart({ savePath, savedFilesDb, item: task.item, filePath: task.filePath })
     }
 
-    const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays, signal })
+    const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays, idleTimeout, connectTimeout, headerTimeout, boxWatch, onRetry, signal })
       .then(async (downloadResult) => {
         const resultEntry = {
           item: formatItem(task.item),
@@ -720,6 +701,150 @@ const saveRecordings = async ({
   return jsonResults
 }
 
+const planSaves = async ({ recordings, savePath, template, forPlex = false, overwrite = false, copyAgain = false }) => {
+  const savedFilesDb = await loadSavedFiles(savePath)
+  const plans = await planEachSave({ recordings, savePath, template, forPlex, overwrite, copyAgain, savedFilesDb, warn: () => {} })
+  return plans.map(({ item, filePath, alreadySaved }) => ({ item: formatItem(item), filePath, alreadySaved }))
+}
+
+const planEachSave = async ({ recordings, savePath, template, forPlex, overwrite, copyAgain, savedFilesDb, warn }) => {
+  const context = {
+    savePath,
+    template,
+    forPlex,
+    overwrite,
+    copyAgain,
+    savedFilesDb,
+    warn,
+    listFoldersOf: createFolderLister(),
+    ownerByPath: ownersBySavedPath(savedFilesDb),
+    savedFolders: portableSavedFolders(savedFilesDb),
+    claimedPaths: new Set()
+  }
+  const plans = []
+  for (const show of recordings) {
+    for (const item of show.items ?? []) plans.push(await planSave({ show, item, ...context }))
+  }
+  return plans
+}
+
+const planSave = async ({ show, item, savePath, template, forPlex, overwrite, copyAgain, savedFilesDb, warn, listFoldersOf, ownerByPath, savedFolders, claimedPaths }) => {
+  const templateData = templateDataFor({ show, item })
+  const { plannedPath, legacyPlannedPath } = await plannedPathsFor({ item, savePath, template, forPlex, templateData, showTitle: show.title, warn, listFoldersOf, savedFolders })
+  const target = await chooseSaveTarget({ plannedPath, legacyPlannedPath, savePath, item, savedFilesDb, ownerByPath, claimedPaths })
+  const savedEntry = overwrite ? undefined : savedFilesDb[item.id]
+  const earlierPaths = savedEntry && isSameTitle(savedTitleOf(savedEntry), item.title)
+    ? earlierCopyPaths({ savePath, savedEntry, legacyPaths: [legacyPlannedPath, legacyDefaultPath({ savePath, show, templateData })] })
+    : []
+  const checkedPaths = copyAgain ? [target.filePath] : [target.filePath, ...earlierPaths]
+  const savedAt = savedEntry ? await firstCompleteCopy({ filePaths: checkedPaths, savedEntry, item }) : null
+  if (savedAt) {
+    claimedPaths.add(savedAt)
+    return { show, item, filePath: savedAt, takenPath: null, alreadySaved: true, partialPath: null }
+  }
+  claimedPaths.add(target.filePath)
+  const partialPath = await movablePartialFor({ earlierPaths, filePath: target.filePath, savedEntry, item })
+  return { show, item, filePath: target.filePath, takenPath: target.takenPath, alreadySaved: false, partialPath }
+}
+
+const templateDataFor = ({ show, item }) => ({
+  show_title: show.title,
+  recording_title: item.title,
+  season_number: item.season_number || '',
+  season_number_padded: item.season_number_padded || '',
+  episode_number: item.episode_number || '',
+  episode_number_padded: item.episode_number_padded || '',
+  ext: item.ext || 'ts'
+})
+
+const plannedPathsFor = async ({ item, savePath, template, forPlex, templateData, showTitle, warn, listFoldersOf, savedFolders }) => {
+  const showFolder = existingFolderFor({ title: showTitle, folders: await listFoldersOf(savePath), savedFolders })
+    || createValidFilename(showTitle)
+  const defaultFilePath = (nameFile = createValidFilename) => {
+    const itemFileName = `${nameFile(buildDefaultFileBase(templateData))}.${templateData.ext}`
+    return path.join(savePath, showFolder, itemFileName)
+  }
+  const legacyPlannedPath = defaultFilePath(createLegacyFilename)
+  if (forPlex) {
+    const plexPath = await plexFilePath({ savePath, showFolder, templateData, listFoldersOf })
+    if (plexPath) return { plannedPath: plexPath, legacyPlannedPath: null }
+    warn(`${item.title} has no season and episode number. Using the default name for it.`)
+    return { plannedPath: defaultFilePath(), legacyPlannedPath }
+  }
+  if (!template) return { plannedPath: defaultFilePath(), legacyPlannedPath }
+  try {
+    const legacyRelativePath = buildTemplatePath({ templateString: template, data: templateData, nameFile: createLegacyFilename })
+    const relativePath = withSavedTemplateFolders({
+      relativePath: processPathTemplate({ templateString: template, data: templateData }),
+      legacyRelativePath,
+      savedFolders
+    })
+    return { plannedPath: path.resolve(savePath, relativePath), legacyPlannedPath: path.resolve(savePath, legacyRelativePath) }
+  } catch (err) {
+    warn(`${err.message} Using the default name for ${item.title}.`)
+    return { plannedPath: defaultFilePath(), legacyPlannedPath }
+  }
+}
+
+const savedTitleOf = (savedEntry) => (typeof savedEntry === 'string' ? savedEntry : savedEntry?.title)
+
+const isSameTitle = (savedTitle, title) => cleanFilename(savedTitle ?? '') === cleanFilename(title ?? '')
+
+const legacyDefaultPath = ({ savePath, show, templateData }) =>
+  path.join(savePath, createLegacyFilename(show.title), `${createLegacyFilename(buildDefaultFileBase(templateData))}.${templateData.ext}`)
+
+const earlierCopyPaths = ({ savePath, savedEntry, legacyPaths }) => {
+  const candidates = typeof savedEntry?.path === 'string'
+    ? [path.resolve(savePath, savedEntry.path)]
+    : legacyPaths.filter(Boolean)
+  return [...new Set(candidates)].filter(filePath => isInsideFolder({ folder: savePath, filePath }))
+}
+
+const isInsideFolder = ({ folder, filePath }) => {
+  const relative = path.relative(path.resolve(folder), filePath)
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
+}
+
+const firstCompleteCopy = async ({ filePaths, savedEntry, item }) => {
+  for (const filePath of new Set(filePaths)) {
+    if (await isSavedFileComplete({ filePath, savedEntry, item })) return filePath
+  }
+  return null
+}
+
+const movablePartialFor = async ({ earlierPaths, filePath, savedEntry, item }) => {
+  if (!isSavedSizeOf({ savedEntry, item })) return null
+  if (await anyExists([filePath, `${filePath}${PART_SUFFIX}`])) return null
+  for (const earlierPath of earlierPaths) {
+    if (earlierPath === filePath) continue
+    const partialPath = `${earlierPath}${PART_SUFFIX}`
+    if (!(await isPartialOf({ partialPath, item }))) continue
+    if (await isLockedByAnotherSave(`${earlierPath}${CONST_LOCK}`)) continue
+    return partialPath
+  }
+  return null
+}
+
+const isPartialOf = async ({ partialPath, item }) => {
+  const stats = await fs.stat(partialPath).catch(() => null)
+  if (!stats?.isFile()) return false
+  return !isPositiveSize(item.size) || stats.size <= item.size + SIZE_TOLERANCE
+}
+
+const isLockedByAnotherSave = async (lockFilePath) =>
+  fsc.existsSync(lockFilePath) && !(await isLockFileStale(lockFilePath))
+
+const movePartialTo = async ({ savePath, partialPath, filePath }) => {
+  const newPartialPath = `${filePath}${PART_SUFFIX}`
+  try {
+    await fs.rename(partialPath, newPartialPath)
+    log(chalk.yellow(`Moved ${path.relative(savePath, partialPath)} to ${path.relative(savePath, newPartialPath)} to carry on saving it under the new name.`))
+  } catch (err) {
+    debug('Could not move %s to %s: %O', partialPath, newPartialPath, err)
+    logWarning(`Could not move ${path.relative(savePath, partialPath)} to the new name (${err.message}). Saving from the start.`)
+  }
+}
+
 const createSaveMultiBar = () => {
   progressBarActive = true
   activeMultiBar = new cliProgress.MultiBar({
@@ -769,21 +894,187 @@ const cancelledResult = (item) => ({
   warning: 'Stopped before this recording started.'
 })
 
-const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite, retryDelays = DOWNLOAD_RETRY_DELAYS, signal }) => {
+const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite, retryDelays = DOWNLOAD_RETRY_DELAYS, idleTimeout, connectTimeout, headerTimeout, boxWatch, onRetry = () => {}, signal }) => {
   const maxAttempts = retryDelays.length + 1
-  let result = await downloadFile({ item, filePath, progressBar, overwrite, signal })
-  let attempts = 1
+  const download = async (overwriteFile) => {
+    const noteStreamClosed = () => boxWatch?.noteStreamClosed(item.id)
+    const result = await downloadFile({ item, filePath, progressBar, overwrite: overwriteFile, idleTimeout, connectTimeout, headerTimeout, onData: () => boxWatch?.noteData(item.id), onStreamClosed: noteStreamClosed, signal })
+    noteStreamClosed()
+    return result
+  }
+  let result = await download(overwrite)
+  let retries = 0
+  let outages = 0
+  let isSpentRetry = false
 
-  while (result.retryable && attempts < maxAttempts && !isShuttingDown && !signal?.aborted) {
-    const delay = retryDelays[attempts - 1]
-    attempts++
-    log(chalk.yellow(`Retrying ${item.title} in ${formatSeconds(delay)} (attempt ${attempts} of ${maxAttempts})…`))
-    await waitUnlessAborted({ delay, signal })
-    if (signal?.aborted) return { ...result, retryable: false, cancelled: true, attempts }
-    result = await downloadFile({ item, filePath, progressBar, overwrite: false, signal })
+  while (!isShuttingDown && !signal?.aborted) {
+    if (isBoxOutage({ result, item, boxWatch, outages })) {
+      if (isSpentRetry) retries--
+      isSpentRetry = false
+      outages++
+      const verdict = await boxWatch.waitForBox(item.url)
+      if (verdict !== BOX_STATE.BACK) return heldItemResult({ verdict, item, result, attempts: retries + 1 })
+    } else if (result.retryable && retries < retryDelays.length) {
+      const delay = retryDelays[retries]
+      retries++
+      isSpentRetry = true
+      log(chalk.yellow(`Retrying ${item.title} in ${formatSeconds(delay)} (attempt ${retries + 1} of ${maxAttempts})…`))
+      callSafely(onRetry, { id: item.id, attempt: retries + 1, of: maxAttempts })
+      await waitUnlessAborted({ delay, signal })
+      if (signal?.aborted) return { ...result, retryable: false, cancelled: true, attempts: retries + 1 }
+      const verdict = await boxWatch?.untilAnswering()
+      if (signal?.aborted || (verdict && verdict !== BOX_STATE.BACK)) return heldItemResult({ verdict, item, result, attempts: retries + 1 })
+    } else {
+      break
+    }
+    result = await download(false)
   }
 
-  return { ...result, attempts }
+  return { ...result, attempts: retries + 1 }
+}
+
+const callSafely = (callback, payload) => {
+  try {
+    callback(payload)
+  } catch (error) {
+    debug('A save callback threw: %O', error)
+  }
+}
+
+const isBoxOutage = ({ result, item, boxWatch, outages }) =>
+  Boolean(boxWatch) &&
+  outages < MAX_BOX_OUTAGES &&
+  isBoxLevelFailure(result.failure) &&
+  !boxWatch.isAnotherStreamFlowing(item.id)
+
+const isBoxLevelFailure = (error) => {
+  if (!error || error.response) return false
+  const cause = error.cause ?? error
+  const causes = Array.isArray(cause.errors) ? [cause, ...cause.errors] : [cause]
+  return causes.some(each => each?.syscall === 'connect' && BOX_LEVEL_CODES.has(each.code))
+}
+
+const heldItemResult = ({ verdict, item, result, attempts }) => {
+  if (verdict === BOX_STATE.GAVE_UP) {
+    logError(`${item.title} was not saved: the box did not answer.`)
+    return { recorded: false, resumed: result.resumed, error: BOX_UNREACHABLE, attempts }
+  }
+  return { recorded: false, resumed: result.resumed, cancelled: true, warning: 'Stopped. Partial file kept for resume.', attempts }
+}
+
+const boxUnreachableResult = (item) => ({
+  item: formatItem(item),
+  recorded: false,
+  status: SAVE_STATUS.FAILED,
+  error: BOX_UNREACHABLE
+})
+
+const createBoxWatch = ({ boxWaitMs, probeDelays, probeTimeout, connectTimeout, flowingWindow, onBoxState, signal }) => {
+  const lastDataAtById = new Map()
+  const probeGaps = probeGapsWithin({ windowMs: boxWaitMs, delays: probeDelays })
+  let outage = null
+  let hasGivenUp = false
+
+  const announce = (state) => {
+    log(chalk.yellow(BOX_STATE_MESSAGES[state]({ boxWaitMs })))
+    callSafely(onBoxState, { state })
+  }
+
+  const runOutage = async (url) => {
+    announce(BOX_STATE.LOST)
+    for (const gap of probeGaps) {
+      await waitUnlessAborted({ delay: gap, signal })
+      if (signal?.aborted) return null
+      if (await isBoxAnswering({ url, probeTimeout, connectTimeout, signal })) {
+        announce(BOX_STATE.BACK)
+        return BOX_STATE.BACK
+      }
+      if (signal?.aborted) return null
+    }
+    hasGivenUp = true
+    announce(BOX_STATE.GAVE_UP)
+    return BOX_STATE.GAVE_UP
+  }
+
+  const waitForBox = (url) => {
+    if (hasGivenUp) return Promise.resolve(BOX_STATE.GAVE_UP)
+    if (!outage) outage = runOutage(url).finally(() => { outage = null })
+    return outage
+  }
+
+  const untilAnswering = () => {
+    if (hasGivenUp) return Promise.resolve(BOX_STATE.GAVE_UP)
+    return outage ?? Promise.resolve(BOX_STATE.BACK)
+  }
+
+  return {
+    waitForBox,
+    untilAnswering,
+    noteData: (id) => lastDataAtById.set(id, Date.now()),
+    noteStreamClosed: (id) => lastDataAtById.delete(id),
+    isAnotherStreamFlowing: (id) => [...lastDataAtById].some(([otherId, at]) => otherId !== id && Date.now() - at < flowingWindow)
+  }
+}
+
+const BOX_STATE_MESSAGES = {
+  [BOX_STATE.LOST]: ({ boxWaitMs }) => `The box stopped answering. Waiting up to ${formatMinutes(boxWaitMs)} for it to answer again…`,
+  [BOX_STATE.BACK]: () => 'The box is answering again. Carrying on.',
+  [BOX_STATE.GAVE_UP]: ({ boxWaitMs }) => `The box did not answer for ${formatMinutes(boxWaitMs)}. Check whether it is in standby or off the network, then run the same command again.`
+}
+
+const probeGapsWithin = ({ windowMs, delays }) => {
+  const gaps = []
+  let elapsed = 0
+  while (true) {
+    const gap = delays[Math.min(gaps.length, delays.length - 1)]
+    if (gaps.length > 0 && elapsed + gap > windowMs) return gaps
+    gaps.push(gap)
+    elapsed += gap
+  }
+}
+
+const isBoxAnswering = async ({ url, probeTimeout, connectTimeout, signal }) => {
+  try {
+    const response = await untilResponse({ signal }, (requestSignal) => httpClient.get(url, {
+      responseType: 'stream',
+      timeout: probeTimeout,
+      headers: { Range: 'bytes=0-0' },
+      httpAgent: connectTimeoutAgent(connectTimeout),
+      signal: requestSignal,
+      validateStatus: () => true
+    }))
+    response.data.destroy()
+    return true
+  } catch (error) {
+    debug('Box probe failed: %s', error.message)
+    return false
+  }
+}
+
+const connectTimeoutAgent = _.memoize((connectTimeout) => {
+  const agent = new http.Agent({ keepAlive: false })
+  agent.createConnection = (options) => {
+    const socket = net.createConnection(options)
+    const timer = setTimeout(() => socket.destroy(connectTimeoutError(options)), connectTimeout)
+    socket.once('connect', () => clearTimeout(timer))
+    socket.once('close', () => clearTimeout(timer))
+    return socket
+  }
+  return agent
+})
+
+const connectTimeoutError = (options) =>
+  Object.assign(new Error(`connect ETIMEDOUT ${options.host}:${options.port}`), {
+    code: 'ETIMEDOUT',
+    syscall: 'connect',
+    address: options.host,
+    port: options.port
+  })
+
+const formatMinutes = (ms) => {
+  const minutes = Math.round(ms / 60000)
+  if (minutes < 1) return formatSeconds(ms)
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`
 }
 
 const waitUnlessAborted = ({ delay, signal }) => new Promise(resolve => {
@@ -806,13 +1097,22 @@ const getDownloadStatus = (downloadResult) => {
 
 const isSavedFileComplete = async ({ filePath, savedEntry, item }) => {
   try {
+    if (!isSavedSizeOf({ savedEntry, item })) return false
     const stats = await fs.stat(filePath)
     const expectedSizes = [getSavedEntrySize(savedEntry), item.size].filter(isPositiveSize)
-    return expectedSizes.every(expectedSize => stats.size >= expectedSize - SIZE_TOLERANCE)
+    const isBigEnough = expectedSizes.every(expectedSize => stats.size >= expectedSize - SIZE_TOLERANCE)
+    const isNotTooBig = !isPositiveSize(item.size) || stats.size <= item.size + SIZE_TOLERANCE
+    return isBigEnough && isNotTooBig
   } catch (err) {
     if (err.code !== 'ENOENT') debug('Error checking saved file %s: %O', filePath, err)
     return false
   }
+}
+
+const isSavedSizeOf = ({ savedEntry, item }) => {
+  const savedSize = getSavedEntrySize(savedEntry)
+  if (!isPositiveSize(savedSize) || !isPositiveSize(item.size)) return true
+  return Math.abs(savedSize - item.size) <= SIZE_TOLERANCE
 }
 
 const getSavedEntrySize = (savedEntry) =>
@@ -876,7 +1176,7 @@ const printRecordings = ({ recordings, jsonOutput, showsOnly, listingOutcome }) 
   })
 }
 
-const handleSaveAction = async ({ recordings, savePath, template, forPlex, overwrite, concurrency, jsonOutput, retryDelays }) => {
+const handleSaveAction = async ({ recordings, savePath, template, forPlex, overwrite, concurrency, boxWaitMs = 0, jsonOutput, retryDelays }) => {
   logHeading('Saving Recordings')
 
   try {
@@ -895,7 +1195,7 @@ const handleSaveAction = async ({ recordings, savePath, template, forPlex, overw
       }
     }
 
-    const results = await saveRecordings({ recordings, savePath, template, forPlex, overwrite, concurrency, retryDelays })
+    const results = await saveRecordings({ recordings, savePath, template, forPlex, overwrite, concurrency, boxWaitMs, retryDelays })
     const summary = summariseSaveResults(results)
 
     if (summary.failed > 0) process.exitCode = 1
@@ -947,6 +1247,8 @@ const formatSaveSummary = ({ total, saved, alreadySaved, failed, stillRecording,
 
 const isValidConcurrency = (value) =>
   Number.isInteger(value) && value >= MIN_CONCURRENT_DOWNLOADS && value <= MAX_CONCURRENT_DOWNLOADS
+
+const isValidBoxWait = (value) => Number.isFinite(value) && value >= 0
 
 const formatSeconds = (ms) => `${Math.round(ms / 1000)} s`
 
@@ -1187,7 +1489,7 @@ const createBrowsePayload = ({ serviceType, objectId, requestedCount = 0 }) => `
  </s:Body>
 </s:Envelope>`
 
-const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {} }) => {
+const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {}, isGoneWhenMissing = false }) => {
   const { cd_ctr: controlUrl, cd_service: serviceType } = apiService
 
   const payload = createBrowsePayload({ serviceType, objectId })
@@ -1235,6 +1537,10 @@ const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {} 
 
     } catch (err) {
       lastError = err
+      if (isGoneWhenMissing && isNoSuchObject(err)) {
+        debug('The box no longer has ObjectID %s; treating it as gone.', objectId)
+        return {}
+      }
       if (attempt > 1) logWarning(`Browse attempt ${attempt-1} failed for ObjectID ${objectId}: ${err.message}`)
       debug('Browse Error Details (ObjectID: %s, Attempt: %d): %O', objectId, attempt, err)
       if (attempt === 1) continue
@@ -1245,6 +1551,9 @@ const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {} 
   onFailure(lastError ?? new Error('Unknown'))
   return null
 }
+
+const isNoSuchObject = (error) =>
+  error.response?.status === 500 && /<errorCode>\s*(501|701)\s*<\/errorCode>/.test(String(error.response.data ?? ''))
 
 const findDirectories = async ({ apiService, objectId = '0', onFailure }) => {
   const didlLite = await browseRequest({ apiService, objectId, onFailure })
@@ -1263,7 +1572,7 @@ const findDirectories = async ({ apiService, objectId = '0', onFailure }) => {
 }
 
 const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show', onFailure }) => {
-  const didlLite = await browseRequest({ apiService, objectId, onFailure })
+  const didlLite = await browseRequest({ apiService, objectId, onFailure, isGoneWhenMissing: true })
   if (!didlLite) return []
   if (!didlLite.item) return []
 
@@ -1386,7 +1695,7 @@ const isCurrentlyRecording = async (item) => {
   }
 }
 
-const downloadFile = async ({ item, filePath, progressBar, overwrite = false, signal }) => {
+const downloadFile = async ({ item, filePath, progressBar, overwrite = false, idleTimeout = BODY_IDLE_TIMEOUT, connectTimeout = CONNECT_TIMEOUT, headerTimeout, onData = () => {}, onStreamClosed = () => {}, signal }) => {
   // Refuse to download items whose UPnP listing reports a non-positive size
   // (Fetch TV's "-1" sentinel for in-progress recordings) — the stream would
   // serve truncated bytes and we'd silently end up with an incomplete file.
@@ -1461,8 +1770,9 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, si
 
     const response = await untilResponse({ signal }, (requestSignal) => httpClient.get(item.url, {
       responseType: 'stream',
-      timeout: isResuming ? RESUME_TIMEOUT : REQUEST_TIMEOUT * 20,
+      timeout: headerTimeout ?? (isResuming ? RESUME_TIMEOUT : REQUEST_TIMEOUT * 20),
       headers,
+      httpAgent: connectTimeoutAgent(connectTimeout),
       signal: requestSignal,
       validateStatus: function (status) {
         return status === 200 || status === 206 || (isResuming && status === RANGE_NOT_SATISFIABLE)
@@ -1470,6 +1780,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, si
     }))
 
     responseStream = response.data
+    responseStream.once('close', onStreamClosed)
 
     if (response.status === RANGE_NOT_SATISFIABLE) {
       responseStream.destroy()
@@ -1579,6 +1890,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, si
         return
       }
       downloadedLength += chunk.length
+      onData()
       if (!progressBar) return
 
       const now = Date.now()
@@ -1606,6 +1918,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, si
 
     const expectedLength = Math.max(totalLength, isPositiveSize(item.size) ? item.size : 0)
     copyKeepingTheTail({ responseStream, writer, bytesLeft: () => (expectedLength > 0 ? expectedLength - downloadedLength : Infinity) })
+    stopWhenTheBoxGoesSilent({ response, idleTimeout })
 
     return new Promise((resolve, reject) => {
       writer.on('finish', async () => {
@@ -1725,6 +2038,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, si
             recorded: false,
             resumed: isResuming,
             retryable: true,
+            failure: err,
             warning: `${describeInterruption({ item, err, completionPercentage })} Partial file kept for resume.`
           }
 
@@ -1752,7 +2066,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, si
         debug('Response stream ended for %s.', item.title)
       })
 
-      stopStreamOnAbort({ signal, responseStream })
+      stopStreamOnAbort({ signal, response })
     })
   } catch (error) {
     if (isResumeTimeoutAtEnd({ error, isResuming, existingSize, item })) {
@@ -1782,7 +2096,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, si
     }
 
     if (signal?.aborted) return { recorded: false, cancelled: true, warning: 'Stopped before this recording started.' }
-    return { recorded: false, retryable: !error.response, error: `Download initiation failed: ${error.message}` }
+    return { recorded: false, retryable: !error.response, failure: error, error: `Download initiation failed: ${error.message}` }
   }
 }
 
@@ -1801,6 +2115,32 @@ const copyKeepingTheTail = ({ responseStream, writer, bytesLeft }) => {
   responseStream.once('end', () => writer.end())
 }
 
+const stopWhenTheBoxGoesSilent = ({ response, idleTimeout }) => {
+  const responseStream = response.data
+  let timer = null
+  const disarm = () => clearTimeout(timer)
+  const arm = () => {
+    disarm()
+    if (responseStream.destroyed || responseStream.isPaused()) return
+    timer = setTimeout(() => dropSilentResponse({ response, error: boxSilentError(idleTimeout) }), idleTimeout)
+  }
+  responseStream.on('data', arm)
+  responseStream.on('resume', arm)
+  responseStream.on('pause', disarm)
+  responseStream.once('end', disarm)
+  responseStream.once('close', disarm)
+  responseStream.once('error', disarm)
+  arm()
+}
+
+const dropSilentResponse = ({ response, error }) => {
+  response.request?.destroy(error)
+  response.data.destroy(error)
+}
+
+const boxSilentError = (idleTimeout) =>
+  Object.assign(new Error(`The box sent no data for ${formatSeconds(idleTimeout)}`), { code: BOX_SILENT_CODE })
+
 const isFarFromTheEnd = (bytesLeft) => bytesLeft > UNPAUSED_TAIL_BYTES
 
 const untilResponse = async ({ signal }, request) => {
@@ -1816,12 +2156,13 @@ const untilResponse = async ({ signal }, request) => {
   }
 }
 
-const stopStreamOnAbort = ({ signal, responseStream }) => {
+const stopStreamOnAbort = ({ signal, response }) => {
   if (!signal) return
+  const responseStream = response.data
   const stop = () => {
     if (responseStream.destroyed) return
     responseStream.unpipe()
-    responseStream.destroy(new Error('Save stopped'))
+    dropSilentResponse({ response, error: new Error('Save stopped') })
   }
   if (signal.aborted) return stop()
   signal.addEventListener('abort', stop, { once: true })
@@ -1874,6 +2215,7 @@ const adoptInPlacePartial = async ({ item, filePath, partFilePath }) => {
 const describeInterruption = ({ item, err, completionPercentage }) => {
   const message = `Download interrupted for ${item.title} at ${completionPercentage.toFixed(1)}%.`
   if (err.code === 'ECONNRESET') return `${message} (Connection reset)`
+  if (err.code === BOX_SILENT_CODE) return `${message} (${err.message})`
   if (err.code === 'ECONNABORTED' || err.message?.toLowerCase().includes('timeout')) return `${message} (Timeout)`
   if (err.message?.includes('Premature close')) return `${message} (Premature close)`
   return `${message} (Error: ${err.message})`
@@ -2118,7 +2460,11 @@ const addSavedFile = async ({ savePath, savedFilesDb, item, size, filePath }) =>
 }
 
 const recordSaveStart = async ({ savePath, savedFilesDb, item, filePath }) => {
-  savedFilesDb[item.id] = { title: item.title, ...savedPathField({ savePath, filePath }) }
+  savedFilesDb[item.id] = {
+    title: item.title,
+    ...(isPositiveSize(item.size) && { size: item.size }),
+    ...savedPathField({ savePath, filePath })
+  }
   await writeSavedFiles({ savePath, savedFilesDb })
 }
 
@@ -2346,6 +2692,8 @@ export {
   isCurrentlyRecording,
   formatItem,
   LISTING_OUTCOME,
+  BOX_STATE,
+  BOX_UNREACHABLE,
   createValidFilename,
   processPathTemplate,
   parseXml,
@@ -2366,6 +2714,7 @@ export {
   addSavedFile,
   createRequestManager,
   saveRecordings,
+  planSaves,
   handleSaveAction,
   summariseSaveResults,
   formatSaveSummary,

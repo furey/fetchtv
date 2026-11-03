@@ -13,6 +13,7 @@ import {
   handleSaveAction,
   summariseSaveResults,
   formatSaveSummary,
+  planSaves,
 } from '../fetchtv.js'
 
 const projectRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
@@ -54,6 +55,11 @@ const sendAllThenReset = ({ res, statedLength, body = BODY }) => {
   res.write(body, () => setTimeout(() => res.socket.destroy(), 20))
 }
 
+const sendHalfThenGoSilent = (res) => {
+  res.writeHead(200, { 'Content-Length': String(BODY.length) })
+  res.write(BODY.subarray(0, HALF))
+}
+
 const sendRangeNotSatisfiable = (res) => {
   res.writeHead(416, { 'Content-Range': `bytes */${BODY.length}` })
   res.end()
@@ -91,6 +97,23 @@ const routes = {
   '/range-not-satisfiable-small-total': ({ res, start }) => {
     if (start !== null) {
       res.writeHead(416, { 'Content-Range': 'bytes */100' })
+      return res.end()
+    }
+    res.writeHead(200, { 'Content-Length': String(BODY.length) })
+    res.end(BODY)
+  },
+  '/silent-then-resume': ({ res, start }) => {
+    if (start !== null) return sendRemainder({ res, start })
+    sendHalfThenGoSilent(res)
+  },
+  '/overstate-then-silent': ({ res, start }) => {
+    if (start !== null) return sendRangeNotSatisfiable(res)
+    res.writeHead(200, { 'Content-Length': String(BODY.length + FETCH_BOX_OVERSTATEMENT) })
+    res.write(BODY)
+  },
+  '/range-not-satisfiable-no-content-range': ({ res, start }) => {
+    if (start !== null) {
+      res.writeHead(416, { SERVER: 'Linux/4.1.20-1.9, UPnP/1.0, DLNADOC/1.50', CONNECTION: 'close' })
       return res.end()
     }
     res.writeHead(200, { 'Content-Length': String(BODY.length) })
@@ -222,7 +245,7 @@ test('download: a short body is not marked saved and keeps the partial file', as
   assert.equal(result[0].status, 'failed')
   assert.equal(await partSize(item), HALF)
   assert.equal(await exists(filePathFor(item)), false)
-  assert.deepEqual((await readDb())['2'], { title: item.title, path: savedPathFor(item) })
+  assert.deepEqual((await readDb())['2'], { title: item.title, size: item.size, path: savedPathFor(item) })
 })
 
 test('download: a mid-stream reset is not marked saved and keeps the partial file', async () => {
@@ -234,7 +257,7 @@ test('download: a mid-stream reset is not marked saved and keeps the partial fil
   assert.match(result[0].warning, /Download interrupted .* at 50\.0%/)
   assert.equal(result[0].status, 'failed')
   assert.equal(await partSize(item), HALF)
-  assert.deepEqual((await readDb())['3'], { title: item.title, path: savedPathFor(item) })
+  assert.deepEqual((await readDb())['3'], { title: item.title, size: item.size, path: savedPathFor(item) })
 })
 
 test('retry: a mid-stream reset resumes with a Range request in the same run', async () => {
@@ -302,6 +325,32 @@ test('fetch box: a 416 to the resume of a complete partial file saves it', async
   assert.deepEqual(requestsFor('/range-not-satisfiable').map(entry => entry.start), [BODY.length])
   assert.equal((await readDb())[item.id].size, BODY.length)
   assert.equal(await exists(`${filePathFor(item)}.part`), false)
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+})
+
+test('fetch box: a 416 with no Content-Range, as the real box sends, saves a partial file at the listed size', async () => {
+  const item = makeItem({ id: '45', route: '/range-not-satisfiable-no-content-range' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(`${filePathFor(item)}.part`, BODY)
+  await writeDb({ [item.id]: { title: item.title, path: savedPathFor(item) } })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.deepEqual(requestsFor('/range-not-satisfiable-no-content-range').map(entry => entry.start), [BODY.length])
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+})
+
+test('fetch box: a 416 with no Content-Range to the resume of a short partial file starts again', async () => {
+  const item = makeItem({ id: '46', route: '/range-not-satisfiable-no-content-range' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(`${filePathFor(item)}.part`, BODY.subarray(0, HALF))
+  await writeDb({ [item.id]: { title: item.title, path: savedPathFor(item) } })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: FAST_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.deepEqual(requestsFor('/range-not-satisfiable-no-content-range').map(entry => entry.start), [HALF, null])
   assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
 })
 
@@ -775,4 +824,188 @@ test('portable names: a template uses the new folder name when nothing is saved 
   await saveWithTemplate('Wait...', [makeItem({ id: '72', route: '/full' })])
 
   assert.ok(await exists(path.join(tmpDir, 'Wait', 'S1 E72 - Test.ts')))
+})
+
+const SHORT_IDLE_TIMEOUT = 100
+
+test('idle: a box that goes silent mid-copy is dropped and the retry resumes it', async () => {
+  const item = makeItem({ id: '60', route: '/silent-then-resume' })
+  const { result, lines } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: FAST_RETRIES, idleTimeout: SHORT_IDLE_TIMEOUT }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.equal(result[0].attempts, 2)
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+  assert.deepEqual(requestsFor('/silent-then-resume').map(entry => entry.start), [null, HALF])
+  assert.ok(lines.some(line => line.includes('The box sent no data for')))
+})
+
+test('idle: a box that goes silent within the size tolerance of the end counts as complete', async () => {
+  const item = makeItem({ id: '61', route: '/overstate-then-silent' })
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES, idleTimeout: SHORT_IDLE_TIMEOUT }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+})
+
+const plexPathFor = (item) => path.join(tmpDir, 'Bluey', 'Season 01', `Bluey - S01E${item.episode_number_padded}.ts`)
+
+test('naming change: skips a recording that is complete at its recorded path', async () => {
+  const item = makeItem({ id: '70', route: '/full' })
+  await writePartial(item, BODY.length)
+  await writeDb({ 70: { title: item.title, size: BODY.length, path: savedPathFor(item) } })
+
+  const { result } = await saveForPlex({ items: [item] })
+
+  assert.equal(result[0].status, 'already_saved')
+  assert.equal(await exists(plexPathFor(item)), false)
+  assert.equal(requestsFor('/full').length, 0)
+  assert.equal((await readDb())['70'].path, savedPathFor(item))
+})
+
+test('naming change: skips a legacy entry whose file has its pre-2.2.5 name', async () => {
+  const item = makeItem({ id: '71', route: '/full', title: 'S1 E71 - Pilot.' })
+  const legacyPath = path.join(tmpDir, 'Bluey', 'S1 E71 - Pilot..ts')
+  await fs.mkdir(path.dirname(legacyPath), { recursive: true })
+  await fs.writeFile(legacyPath, BODY)
+  await writeDb({ 71: item.title })
+
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'already_saved')
+  assert.equal(await exists(filePathFor({ title: 'S1 E71 - Pilot' })), false)
+  assert.equal(requestsFor('/full').length, 0)
+})
+
+test('naming change: moves a recorded .part file to the new name and resumes it', async () => {
+  const item = makeItem({ id: '72', route: '/full' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(`${filePathFor(item)}.part`, BODY.subarray(0, HALF))
+  await writeDb({ 72: { title: item.title, path: savedPathFor(item) } })
+
+  const { result } = await saveForPlex({ items: [item] })
+
+  assert.equal(result[0].status, 'saved')
+  assert.equal(result[0].resumed, true)
+  assert.ok((await fs.readFile(plexPathFor(item))).equals(BODY))
+  assert.equal(await exists(`${filePathFor(item)}.part`), false)
+  assert.deepEqual(requestsFor('/full').map(entry => entry.start), [HALF])
+  assert.equal((await readDb())['72'].path, 'Bluey/Season 01/Bluey - S01E72.ts')
+})
+
+test('naming change: does not skip when the saved entry under the same id has another title', async () => {
+  const item = makeItem({ id: '77', route: '/full' })
+  const other = makeItem({ id: '78', route: '/full', title: 'S1 E78 - Other' })
+  await writePartial(other, BODY.length)
+  await writeDb({ 77: { title: other.title, size: BODY.length, path: savedPathFor(other) } })
+
+  const { result } = await saveForPlex({ items: [item] })
+
+  assert.equal(result[0].status, 'saved')
+  assert.ok((await fs.readFile(plexPathFor(item))).equals(BODY))
+})
+
+test('copyAgain: saves a second copy under the new naming', async () => {
+  const item = makeItem({ id: '73', route: '/full' })
+  await writePartial(item, BODY.length)
+  await writeDb({ 73: { title: item.title, size: BODY.length, path: savedPathFor(item) } })
+
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, forPlex: true, copyAgain: true, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'saved')
+  assert.ok((await fs.readFile(plexPathFor(item))).equals(BODY))
+  assert.ok((await fs.readFile(filePathFor(item))).equals(BODY))
+  assert.equal((await readDb())['73'].path, 'Bluey/Season 01/Bluey - S01E73.ts')
+})
+
+test('copyAgain: skips a recording already saved under the same naming', async () => {
+  const item = makeItem({ id: '74', route: '/full' })
+  await writePartial(item, BODY.length)
+  await writeDb({ 74: { title: item.title, size: BODY.length, path: savedPathFor(item) } })
+
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, copyAgain: true, retryDelays: NO_RETRIES }))
+
+  assert.equal(result[0].status, 'already_saved')
+  assert.equal(requestsFor('/full').length, 0)
+})
+
+test('planSaves: reports the recordings a save would skip without writing anything', async () => {
+  const saved = makeItem({ id: '75', route: '/full' })
+  const missing = makeItem({ id: '76', route: '/full' })
+  await writePartial(saved, BODY.length)
+  await writeDb({
+    75: { title: saved.title, size: BODY.length, path: savedPathFor(saved) },
+    76: { title: missing.title, size: BODY.length, path: savedPathFor(missing) }
+  })
+
+  const plain = await planSaves({ recordings: makeRecordings([saved, missing]), savePath: tmpDir, forPlex: true })
+  const again = await planSaves({ recordings: makeRecordings([saved, missing]), savePath: tmpDir, forPlex: true, copyAgain: true })
+
+  assert.deepEqual(plain.map(plan => plan.alreadySaved), [true, false])
+  assert.deepEqual(again.map(plan => plan.alreadySaved), [false, false])
+  assert.equal(await exists(path.join(tmpDir, 'Bluey', 'Season 01')), false)
+})
+
+test('cancel: stopping a save while the box is silent ends it at once', async () => {
+  const item = makeItem({ id: '80', route: '/silent-then-resume' })
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 200)
+  const startedAt = Date.now()
+  const { result } = await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: FAST_RETRIES, signal: controller.signal }))
+
+  assert.equal(result[0].status, 'cancelled')
+  assert.ok(Date.now() - startedAt < 5000)
+  assert.equal(await partSize(item), HALF)
+})
+
+test('naming change: does not skip a same-title file whose saved size differs from the listing', async () => {
+  const item = makeItem({ id: '81', route: '/full' })
+  const bigger = Buffer.alloc(BODY.length + 4 * 1024)
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(filePathFor(item), bigger)
+  await writeDb({ 81: { title: item.title, size: bigger.length, path: savedPathFor(item) } })
+
+  const plans = await planSaves({ recordings: makeRecordings([item]), savePath: tmpDir, forPlex: true })
+
+  assert.equal(plans[0].alreadySaved, false)
+})
+
+test('naming change: does not skip a same-title file bigger than the listing when the entry has no size', async () => {
+  const item = makeItem({ id: '82', route: '/full' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(filePathFor(item), Buffer.alloc(BODY.length * 2))
+  await writeDb({ 82: { title: item.title, path: savedPathFor(item) } })
+
+  const plans = await planSaves({ recordings: makeRecordings([item]), savePath: tmpDir, forPlex: true })
+
+  assert.equal(plans[0].alreadySaved, false)
+})
+
+test('naming change: leaves a .part file alone when the saved size belongs to another recording', async () => {
+  const item = makeItem({ id: '83', route: '/full' })
+  await fs.mkdir(path.dirname(filePathFor(item)), { recursive: true })
+  await fs.writeFile(`${filePathFor(item)}.part`, BODY.subarray(0, HALF))
+  await writeDb({ 83: { title: item.title, size: BODY.length * 2, path: savedPathFor(item) } })
+
+  const { result } = await saveForPlex({ items: [item] })
+
+  assert.equal(result[0].status, 'saved')
+  assert.equal(result[0].resumed, false)
+  assert.equal(await partSize(item), HALF)
+  assert.deepEqual(requestsFor('/full').map(entry => entry.start), [null])
+})
+
+test('save start: records the listing size with the path', async () => {
+  const item = makeItem({ id: '84', route: '/silent-then-resume' })
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 200)
+  await silenceConsole(() =>
+    saveRecordings({ recordings: makeRecordings([item]), savePath: tmpDir, retryDelays: NO_RETRIES, signal: controller.signal }))
+
+  assert.deepEqual((await readDb())['84'], { title: item.title, size: BODY.length, path: savedPathFor(item) })
 })
