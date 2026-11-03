@@ -1489,7 +1489,7 @@ const createBrowsePayload = ({ serviceType, objectId, requestedCount = 0 }) => `
  </s:Body>
 </s:Envelope>`
 
-const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {} }) => {
+const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {}, isGoneWhenMissing = false }) => {
   const { cd_ctr: controlUrl, cd_service: serviceType } = apiService
 
   const payload = createBrowsePayload({ serviceType, objectId })
@@ -1537,6 +1537,10 @@ const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {} 
 
     } catch (err) {
       lastError = err
+      if (isGoneWhenMissing && isNoSuchObject(err)) {
+        debug('The box no longer has ObjectID %s; treating it as gone.', objectId)
+        return {}
+      }
       if (attempt > 1) logWarning(`Browse attempt ${attempt-1} failed for ObjectID ${objectId}: ${err.message}`)
       debug('Browse Error Details (ObjectID: %s, Attempt: %d): %O', objectId, attempt, err)
       if (attempt === 1) continue
@@ -1547,6 +1551,9 @@ const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {} 
   onFailure(lastError ?? new Error('Unknown'))
   return null
 }
+
+const isNoSuchObject = (error) =>
+  error.response?.status === 500 && /<errorCode>\s*(501|701)\s*<\/errorCode>/.test(String(error.response.data ?? ''))
 
 const findDirectories = async ({ apiService, objectId = '0', onFailure }) => {
   const didlLite = await browseRequest({ apiService, objectId, onFailure })
@@ -1565,7 +1572,7 @@ const findDirectories = async ({ apiService, objectId = '0', onFailure }) => {
 }
 
 const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show', onFailure }) => {
-  const didlLite = await browseRequest({ apiService, objectId, onFailure })
+  const didlLite = await browseRequest({ apiService, objectId, onFailure, isGoneWhenMissing: true })
   if (!didlLite) return []
   if (!didlLite.item) return []
 
