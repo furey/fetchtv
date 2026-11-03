@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import fsc from 'fs'
+import net from 'net'
+import http from 'http'
 import ora from 'ora'
 import _ from 'lodash'
 import path from 'path'
@@ -59,6 +61,13 @@ const MIN_CONCURRENT_DOWNLOADS = 1
 const MAX_CONCURRENT_DOWNLOADS = 10
 const DEFAULT_CONCURRENT_DOWNLOADS = 2
 const DOWNLOAD_RETRY_DELAYS = [5000, 15000]
+const CONNECT_TIMEOUT = 10000
+const BOX_PROBE_TIMEOUT = 5000
+const BOX_PROBE_DELAYS = [5000, 5000, 10000, 30000]
+const MAX_BOX_OUTAGES = 3
+const FLOWING_STREAM_WINDOW = 60000
+const BOX_UNREACHABLE = 'box-unreachable'
+const BOX_LEVEL_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'EHOSTDOWN', 'ENETUNREACH', 'ENETDOWN', 'EADDRNOTAVAIL', 'ETIMEDOUT'])
 const UPNP_CONTENT_DIRECTORY_URN = 'urn:schemas-upnp-org:service:ContentDirectory:1'
 
 const REQUEST_QUEUE_PRIORITY = {
@@ -67,6 +76,12 @@ const REQUEST_QUEUE_PRIORITY = {
   SHOW: 2,
   RECORDING_CHECK: 3
 }
+
+const BOX_STATE = Object.freeze({
+  LOST: 'lost',
+  BACK: 'back',
+  GAVE_UP: 'gave-up'
+})
 
 const SAVE_STATUS = {
   SAVED: 'saved',
@@ -126,11 +141,13 @@ const main = async () => {
     .option('for-plex', { type: 'boolean', default: false, description: 'Save as Show/Season 01/Show - S01E02.ext, the Plex and Freetvarr layout (overrides --template)' })
     .option('overwrite', { type: 'boolean', default: false, description: 'Save again over files that fetchtv saved earlier (never over other files)' })
     .option('concurrency', { type: 'number', default: DEFAULT_CONCURRENT_DOWNLOADS, description: `Number of recordings to save at the same time (${MIN_CONCURRENT_DOWNLOADS}-${MAX_CONCURRENT_DOWNLOADS})` })
+    .option('box-wait', { type: 'number', default: 0, description: 'Minutes to wait for the box to answer again if it stops answering during a save, e.g. after standby or a restart (0: no wait)' })
     .option('json', { type: 'boolean', default: false, description: 'Output show/recording/save results in JSON' })
     .option('debug', { type: 'boolean', default: false, description: 'Enable verbose logging for debugging'})
     .check(argv => {
-      if (isValidConcurrency(argv.concurrency)) return true
-      throw new Error(`--concurrency must be a whole number from ${MIN_CONCURRENT_DOWNLOADS} to ${MAX_CONCURRENT_DOWNLOADS}.`)
+      if (!isValidConcurrency(argv.concurrency)) throw new Error(`--concurrency must be a whole number from ${MIN_CONCURRENT_DOWNLOADS} to ${MAX_CONCURRENT_DOWNLOADS}.`)
+      if (!isValidBoxWait(argv.boxWait)) throw new Error('--box-wait must be a number of minutes, 0 or more.')
+      return true
     })
     .help()
     .alias('h', 'help')
@@ -195,6 +212,7 @@ const main = async () => {
         forPlex,
         overwrite: argv.overwrite,
         concurrency: argv.concurrency,
+        boxWaitMs: argv.boxWait * 60000,
         jsonOutput: argv.json
       })
     }
@@ -489,10 +507,21 @@ const saveRecordings = async ({
   concurrency = DEFAULT_CONCURRENT_DOWNLOADS,
   retryDelays = DOWNLOAD_RETRY_DELAYS,
   idleTimeout = BODY_IDLE_TIMEOUT,
+  connectTimeout = CONNECT_TIMEOUT,
+  headerTimeout,
+  boxWaitMs = 0,
+  probeDelays = BOX_PROBE_DELAYS,
+  probeTimeout = BOX_PROBE_TIMEOUT,
+  flowingWindow = FLOWING_STREAM_WINDOW,
   onProgress,
   onResult,
+  onBoxState = () => {},
+  onRetry = () => {},
   signal
 }) => {
+  const boxWatch = boxWaitMs > 0
+    ? createBoxWatch({ boxWaitMs, probeDelays, probeTimeout, connectTimeout, flowingWindow, onBoxState, signal })
+    : null
   const savedFilesDb = await loadSavedFiles(savePath)
   const plans = await planEachSave({ recordings, savePath, template, forPlex, overwrite, copyAgain, savedFilesDb, warn: logWarning })
   const jsonResults = []
@@ -593,6 +622,11 @@ const saveRecordings = async ({
       await Promise.race(activePromises)
     }
 
+    if (boxWatch && await boxWatch.untilAnswering() === BOX_STATE.GAVE_UP) {
+      addResult(boxUnreachableResult(task.item))
+      continue
+    }
+
     if (signal?.aborted) {
       addResult(cancelledResult(task.item))
       continue
@@ -606,7 +640,7 @@ const saveRecordings = async ({
       await recordSaveStart({ savePath, savedFilesDb, item: task.item, filePath: task.filePath })
     }
 
-    const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays, idleTimeout, signal })
+    const promise = downloadFileWithRetries({ item: task.item, filePath: task.filePath, progressBar, overwrite, retryDelays, idleTimeout, connectTimeout, headerTimeout, boxWatch, onRetry, signal })
       .then(async (downloadResult) => {
         const resultEntry = {
           item: formatItem(task.item),
@@ -860,21 +894,178 @@ const cancelledResult = (item) => ({
   warning: 'Stopped before this recording started.'
 })
 
-const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite, retryDelays = DOWNLOAD_RETRY_DELAYS, idleTimeout, signal }) => {
+const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite, retryDelays = DOWNLOAD_RETRY_DELAYS, idleTimeout, connectTimeout, headerTimeout, boxWatch, onRetry = () => {}, signal }) => {
   const maxAttempts = retryDelays.length + 1
-  let result = await downloadFile({ item, filePath, progressBar, overwrite, idleTimeout, signal })
-  let attempts = 1
+  const download = async (overwriteFile) => {
+    const noteStreamClosed = () => boxWatch?.noteStreamClosed(item.id)
+    const result = await downloadFile({ item, filePath, progressBar, overwrite: overwriteFile, idleTimeout, connectTimeout, headerTimeout, onData: () => boxWatch?.noteData(item.id), onStreamClosed: noteStreamClosed, signal })
+    noteStreamClosed()
+    return result
+  }
+  let result = await download(overwrite)
+  let retries = 0
+  let outages = 0
+  let isSpentRetry = false
 
-  while (result.retryable && attempts < maxAttempts && !isShuttingDown && !signal?.aborted) {
-    const delay = retryDelays[attempts - 1]
-    attempts++
-    log(chalk.yellow(`Retrying ${item.title} in ${formatSeconds(delay)} (attempt ${attempts} of ${maxAttempts})…`))
-    await waitUnlessAborted({ delay, signal })
-    if (signal?.aborted) return { ...result, retryable: false, cancelled: true, attempts }
-    result = await downloadFile({ item, filePath, progressBar, overwrite: false, idleTimeout, signal })
+  while (!isShuttingDown && !signal?.aborted) {
+    if (isBoxOutage({ result, item, boxWatch, outages })) {
+      if (isSpentRetry) retries--
+      isSpentRetry = false
+      outages++
+      const verdict = await boxWatch.waitForBox(item.url)
+      if (verdict !== BOX_STATE.BACK) return heldItemResult({ verdict, item, result, attempts: retries + 1 })
+    } else if (result.retryable && retries < retryDelays.length) {
+      const delay = retryDelays[retries]
+      retries++
+      isSpentRetry = true
+      log(chalk.yellow(`Retrying ${item.title} in ${formatSeconds(delay)} (attempt ${retries + 1} of ${maxAttempts})…`))
+      onRetry({ id: item.id, attempt: retries + 1, of: maxAttempts })
+      await waitUnlessAborted({ delay, signal })
+      const verdict = signal?.aborted ? null : await boxWatch?.untilAnswering()
+      if (signal?.aborted || (verdict && verdict !== BOX_STATE.BACK)) return heldItemResult({ verdict, item, result, attempts: retries + 1 })
+    } else {
+      break
+    }
+    result = await download(false)
   }
 
-  return { ...result, attempts }
+  return { ...result, attempts: retries + 1 }
+}
+
+const isBoxOutage = ({ result, item, boxWatch, outages }) =>
+  Boolean(boxWatch) &&
+  outages < MAX_BOX_OUTAGES &&
+  isBoxLevelFailure(result.failure) &&
+  !boxWatch.isAnotherStreamFlowing(item.id)
+
+const isBoxLevelFailure = (error) => {
+  if (!error || error.response) return false
+  const cause = error.cause ?? error
+  const causes = Array.isArray(cause.errors) ? [cause, ...cause.errors] : [cause]
+  return causes.some(each => each?.syscall === 'connect' && BOX_LEVEL_CODES.has(each.code))
+}
+
+const heldItemResult = ({ verdict, item, result, attempts }) => {
+  if (verdict === BOX_STATE.GAVE_UP) {
+    logError(`${item.title} was not saved: the box did not answer.`)
+    return { recorded: false, resumed: result.resumed, error: BOX_UNREACHABLE, attempts }
+  }
+  return { recorded: false, resumed: result.resumed, cancelled: true, warning: 'Stopped. Partial file kept for resume.', attempts }
+}
+
+const boxUnreachableResult = (item) => ({
+  item: formatItem(item),
+  recorded: false,
+  status: SAVE_STATUS.FAILED,
+  error: BOX_UNREACHABLE
+})
+
+const createBoxWatch = ({ boxWaitMs, probeDelays, probeTimeout, connectTimeout, flowingWindow, onBoxState, signal }) => {
+  const lastDataAtById = new Map()
+  const probeGaps = probeGapsWithin({ windowMs: boxWaitMs, delays: probeDelays })
+  let outage = null
+  let hasGivenUp = false
+
+  const announce = (state) => {
+    log(chalk.yellow(BOX_STATE_MESSAGES[state]({ boxWaitMs })))
+    onBoxState({ state })
+  }
+
+  const runOutage = async (url) => {
+    announce(BOX_STATE.LOST)
+    for (const gap of probeGaps) {
+      await waitUnlessAborted({ delay: gap, signal })
+      if (signal?.aborted) return null
+      if (await isBoxAnswering({ url, probeTimeout, connectTimeout, signal })) {
+        announce(BOX_STATE.BACK)
+        return BOX_STATE.BACK
+      }
+      if (signal?.aborted) return null
+    }
+    hasGivenUp = true
+    announce(BOX_STATE.GAVE_UP)
+    return BOX_STATE.GAVE_UP
+  }
+
+  const waitForBox = (url) => {
+    if (hasGivenUp) return Promise.resolve(BOX_STATE.GAVE_UP)
+    if (!outage) outage = runOutage(url).finally(() => { outage = null })
+    return outage
+  }
+
+  const untilAnswering = () => {
+    if (hasGivenUp) return Promise.resolve(BOX_STATE.GAVE_UP)
+    return outage ?? Promise.resolve(BOX_STATE.BACK)
+  }
+
+  return {
+    waitForBox,
+    untilAnswering,
+    noteData: (id) => lastDataAtById.set(id, Date.now()),
+    noteStreamClosed: (id) => lastDataAtById.delete(id),
+    isAnotherStreamFlowing: (id) => [...lastDataAtById].some(([otherId, at]) => otherId !== id && Date.now() - at < flowingWindow)
+  }
+}
+
+const BOX_STATE_MESSAGES = {
+  [BOX_STATE.LOST]: ({ boxWaitMs }) => `The box stopped answering. Waiting up to ${formatMinutes(boxWaitMs)} for it to answer again…`,
+  [BOX_STATE.BACK]: () => 'The box is answering again. Carrying on.',
+  [BOX_STATE.GAVE_UP]: ({ boxWaitMs }) => `The box did not answer for ${formatMinutes(boxWaitMs)}. Check whether it is in standby or off the network, then run the same command again.`
+}
+
+const probeGapsWithin = ({ windowMs, delays }) => {
+  const gaps = []
+  let elapsed = 0
+  while (true) {
+    const gap = delays[Math.min(gaps.length, delays.length - 1)]
+    if (gaps.length > 0 && elapsed + gap > windowMs) return gaps
+    gaps.push(gap)
+    elapsed += gap
+  }
+}
+
+const isBoxAnswering = async ({ url, probeTimeout, connectTimeout, signal }) => {
+  try {
+    const response = await untilResponse({ signal }, (requestSignal) => httpClient.get(url, {
+      responseType: 'stream',
+      timeout: probeTimeout,
+      headers: { Range: 'bytes=0-0' },
+      httpAgent: connectTimeoutAgent(connectTimeout),
+      signal: requestSignal,
+      validateStatus: () => true
+    }))
+    response.data.destroy()
+    return true
+  } catch (error) {
+    debug('Box probe failed: %s', error.message)
+    return false
+  }
+}
+
+const connectTimeoutAgent = _.memoize((connectTimeout) => {
+  const agent = new http.Agent({ keepAlive: false })
+  agent.createConnection = (options) => {
+    const socket = net.createConnection(options)
+    const timer = setTimeout(() => socket.destroy(connectTimeoutError(options)), connectTimeout)
+    socket.once('connect', () => clearTimeout(timer))
+    socket.once('close', () => clearTimeout(timer))
+    return socket
+  }
+  return agent
+})
+
+const connectTimeoutError = (options) =>
+  Object.assign(new Error(`connect ETIMEDOUT ${options.host}:${options.port}`), {
+    code: 'ETIMEDOUT',
+    syscall: 'connect',
+    address: options.host,
+    port: options.port
+  })
+
+const formatMinutes = (ms) => {
+  const minutes = Math.round(ms / 60000)
+  if (minutes < 1) return formatSeconds(ms)
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`
 }
 
 const waitUnlessAborted = ({ delay, signal }) => new Promise(resolve => {
@@ -976,7 +1167,7 @@ const printRecordings = ({ recordings, jsonOutput, showsOnly, listingOutcome }) 
   })
 }
 
-const handleSaveAction = async ({ recordings, savePath, template, forPlex, overwrite, concurrency, jsonOutput, retryDelays }) => {
+const handleSaveAction = async ({ recordings, savePath, template, forPlex, overwrite, concurrency, boxWaitMs = 0, jsonOutput, retryDelays }) => {
   logHeading('Saving Recordings')
 
   try {
@@ -995,7 +1186,7 @@ const handleSaveAction = async ({ recordings, savePath, template, forPlex, overw
       }
     }
 
-    const results = await saveRecordings({ recordings, savePath, template, forPlex, overwrite, concurrency, retryDelays })
+    const results = await saveRecordings({ recordings, savePath, template, forPlex, overwrite, concurrency, boxWaitMs, retryDelays })
     const summary = summariseSaveResults(results)
 
     if (summary.failed > 0) process.exitCode = 1
@@ -1047,6 +1238,8 @@ const formatSaveSummary = ({ total, saved, alreadySaved, failed, stillRecording,
 
 const isValidConcurrency = (value) =>
   Number.isInteger(value) && value >= MIN_CONCURRENT_DOWNLOADS && value <= MAX_CONCURRENT_DOWNLOADS
+
+const isValidBoxWait = (value) => Number.isFinite(value) && value >= 0
 
 const formatSeconds = (ms) => `${Math.round(ms / 1000)} s`
 
@@ -1486,7 +1679,7 @@ const isCurrentlyRecording = async (item) => {
   }
 }
 
-const downloadFile = async ({ item, filePath, progressBar, overwrite = false, idleTimeout = BODY_IDLE_TIMEOUT, signal }) => {
+const downloadFile = async ({ item, filePath, progressBar, overwrite = false, idleTimeout = BODY_IDLE_TIMEOUT, connectTimeout = CONNECT_TIMEOUT, headerTimeout, onData = () => {}, onStreamClosed = () => {}, signal }) => {
   // Refuse to download items whose UPnP listing reports a non-positive size
   // (Fetch TV's "-1" sentinel for in-progress recordings) — the stream would
   // serve truncated bytes and we'd silently end up with an incomplete file.
@@ -1561,8 +1754,9 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, id
 
     const response = await untilResponse({ signal }, (requestSignal) => httpClient.get(item.url, {
       responseType: 'stream',
-      timeout: isResuming ? RESUME_TIMEOUT : REQUEST_TIMEOUT * 20,
+      timeout: headerTimeout ?? (isResuming ? RESUME_TIMEOUT : REQUEST_TIMEOUT * 20),
       headers,
+      httpAgent: connectTimeoutAgent(connectTimeout),
       signal: requestSignal,
       validateStatus: function (status) {
         return status === 200 || status === 206 || (isResuming && status === RANGE_NOT_SATISFIABLE)
@@ -1570,6 +1764,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, id
     }))
 
     responseStream = response.data
+    responseStream.once('close', onStreamClosed)
 
     if (response.status === RANGE_NOT_SATISFIABLE) {
       responseStream.destroy()
@@ -1679,6 +1874,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, id
         return
       }
       downloadedLength += chunk.length
+      onData()
       if (!progressBar) return
 
       const now = Date.now()
@@ -1826,6 +2022,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, id
             recorded: false,
             resumed: isResuming,
             retryable: true,
+            failure: err,
             warning: `${describeInterruption({ item, err, completionPercentage })} Partial file kept for resume.`
           }
 
@@ -1883,7 +2080,7 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, id
     }
 
     if (signal?.aborted) return { recorded: false, cancelled: true, warning: 'Stopped before this recording started.' }
-    return { recorded: false, retryable: !error.response, error: `Download initiation failed: ${error.message}` }
+    return { recorded: false, retryable: !error.response, failure: error, error: `Download initiation failed: ${error.message}` }
   }
 }
 
@@ -2479,6 +2676,8 @@ export {
   isCurrentlyRecording,
   formatItem,
   LISTING_OUTCOME,
+  BOX_STATE,
+  BOX_UNREACHABLE,
   createValidFilename,
   processPathTemplate,
   parseXml,
