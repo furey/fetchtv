@@ -452,3 +452,28 @@ test('box wait: the wait counts probes at 5, 10, and 20, then every 30, up to th
   assert.equal(results[0].error, BOX_UNREACHABLE)
   assert.equal(connections, 1 + 22)
 })
+
+test('box wait: a callback that throws does not stop the save', async () => {
+  const box = await createBox()
+  await box.stop()
+  const items = [makeItem({ id: '22', url: box.url('/reset') }), makeItem({ id: '23', url: box.url('/full') })]
+  setTimeout(() => box.start(), 100)
+  const { results } = await save({
+    items,
+    concurrency: 1,
+    onBoxState: () => { throw new Error('onBoxState broke') },
+    onRetry: () => { throw new Error('onRetry broke') },
+  })
+
+  assert.deepEqual(results.map(result => result.status), ['saved', 'saved'])
+})
+
+test('box wait: off, Stop during a retry delay returns what 2.2.x returned', async () => {
+  const box = await createBox()
+  const item = makeItem({ id: '24', url: box.url('/reset') })
+  const controller = new AbortController()
+  const { results } = await save({ items: [item], boxWaitMs: 0, retryDelays: [5000], onRetry: () => setTimeout(() => controller.abort(), 20), signal: controller.signal })
+
+  assert.equal(results[0].status, 'cancelled')
+  assert.match(results[0].warning, /^Download interrupted for .* Partial file kept for resume\.$/)
+})
