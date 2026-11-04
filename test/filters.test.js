@@ -25,6 +25,13 @@ const location = {
   },
 }
 
+const FIXTURE_ITEM_HOST = 'http://192.168.1.10:49152'
+const MAX_OCTET_RECORDING = 4398046510080
+
+const serveLiveRecordingLengths = () => {
+  nock(FIXTURE_ITEM_HOST).persist().head(/.*/).reply(200, '', { 'content-length': String(MAX_OCTET_RECORDING) })
+}
+
 const extractObjectId = (body) => {
   const match = String(body).match(/<ObjectID>([^<]+)<\/ObjectID>/)
   return match ? match[1] : null
@@ -52,7 +59,10 @@ const interceptBrowse = () => {
 beforeEach(() => {
   nock.cleanAll()
   interceptBrowse()
+  serveLiveRecordingLengths()
 })
+
+nock.disableNetConnect()
 
 after(() => {
   nock.restore()

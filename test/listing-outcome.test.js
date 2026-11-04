@@ -25,6 +25,13 @@ const location = {
   },
 }
 
+const FIXTURE_ITEM_HOST = 'http://192.168.1.10:49152'
+const MAX_OCTET_RECORDING = 4398046510080
+
+const serveLiveRecordingLengths = () => {
+  nock(FIXTURE_ITEM_HOST).persist().head(/.*/).reply(200, '', { 'content-length': String(MAX_OCTET_RECORDING) })
+}
+
 const BOX_HEADERS = { SERVER: 'Linux/4.1.20-1.9, UPnP/1.0, DLNADOC/1.50', CONNECTION: 'close' }
 
 const objectIdOf = (body) => String(body).match(/<ObjectID>([^<]+)<\/ObjectID>/)?.[1]
@@ -53,7 +60,12 @@ const listWithOutcome = async (listLocation = location) => {
   }
 }
 
-beforeEach(() => nock.cleanAll())
+beforeEach(() => {
+  nock.cleanAll()
+  serveLiveRecordingLengths()
+})
+
+nock.disableNetConnect()
 
 after(() => nock.restore())
 

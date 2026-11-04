@@ -76,6 +76,13 @@ const DOWNLOAD_RETRY_DELAYS = [5000, 15000]
 const CONNECT_TIMEOUT = 10000
 const BOX_PROBE_TIMEOUT = 5000
 const BOX_PROBE_DELAYS = [5000, 5000, 10000, 30000]
+const RECORDING_MARKER_MARGIN = 1000000
+const LENGTH_PROBE_TIMEOUT = 5000
+const LENGTH_SETTLE_DELAY = 3000
+const LENGTH_PROBE_CONCURRENCY = 3
+const MISSING_ITEM_CACHE_TTL = 5 * 60 * 1000
+const FINISHED_LENGTH_CACHE_TTL = 60 * 60 * 1000
+const MISSING_STATUSES = new Set([404, 410])
 const MAX_BOX_OUTAGES = 3
 const FLOWING_STREAM_WINDOW = 60000
 const BOX_UNREACHABLE = 'box-unreachable'
@@ -443,6 +450,7 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
 
   const totalShows = filteredShows.length
   let processedShows = 0
+  const limitLengthProbe = createLimiter(LENGTH_PROBE_CONCURRENCY)
 
   const progressBar = createShowProgress({ totalShows, onProgress })
 
@@ -457,6 +465,8 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
 
       if (titleFilter.length > 0)
         items = items.filter(item => titleFilter.some(t => item.title.toLowerCase().includes(t)))
+
+      items = await Promise.all(items.map(item => resolveUnknownSize({ item, limit: limitLengthProbe })))
 
       if (isRecordingFilter && items.length > 0) {
         const recordingItems = []
@@ -1730,15 +1740,109 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show', onF
   }).filter(i => i.id && i.url && i.title)
 }
 
+const knownLengths = new Map()
+
+const resolveUnknownSize = async ({ item, limit }) => {
+  if (isPositiveSize(item.size) || !item.url) return item
+  const probe = cachedLengthProbe(item.url) ?? await probeAndCacheLength({ url: item.url, limit })
+  debug('Length probe for %s (listed size %s): %O', item.title, item.size, probe)
+  if (probe.finished) return { ...item, size: probe.length }
+  if (probe.unavailable) return { ...item, unavailable: true }
+  return item
+}
+
+const probeAndCacheLength = async ({ url, limit }) => {
+  const probe = await probeSettledLength({ url, limit })
+  cacheLengthProbe({ url, probe })
+  return probe
+}
+
+const probeSettledLength = async ({ url, limit }) => {
+  const first = await limit(() => probeLength(url))
+  if (!isFinishedLength(first.length)) return first
+  await new Promise(resolve => setTimeout(resolve, LENGTH_SETTLE_DELAY))
+  const second = await limit(() => probeLength(url))
+  if (second.unavailable) return second
+  if (second.length === first.length) return { finished: true, length: first.length }
+  return { growing: true, length: second.length }
+}
+
+const isFinishedLength = (length) =>
+  isPositiveSize(length) && length < MAX_OCTET_RECORDING - RECORDING_MARKER_MARGIN
+
+const probeLength = async (url) => {
+  try {
+    const response = await httpClient.head(url, { timeout: LENGTH_PROBE_TIMEOUT })
+    const length = parseInt(response.headers['content-length'] ?? '', 10)
+    if (isPositiveSize(length)) return { length }
+  } catch (error) {
+    if (MISSING_STATUSES.has(error.response?.status)) return { unavailable: true, status: error.response.status }
+  }
+  return probeLengthWithRange(url)
+}
+
+const probeLengthWithRange = async (url) => {
+  try {
+    const response = await httpClient.get(url, {
+      timeout: LENGTH_PROBE_TIMEOUT,
+      responseType: 'stream',
+      headers: { Range: 'bytes=0-0' }
+    })
+    response.data.destroy()
+    const length = response.status === 206
+      ? parseInt(String(response.headers['content-range'] ?? '').split('/')[1], 10)
+      : parseInt(response.headers['content-length'] ?? '', 10)
+    return isPositiveSize(length) ? { length } : {}
+  } catch (error) {
+    error.response?.data?.destroy?.()
+    if (MISSING_STATUSES.has(error.response?.status)) return { unavailable: true, status: error.response.status }
+    return { unavailable: true, code: error.response?.status ?? error.code ?? error.message }
+  }
+}
+
+const cachedLengthProbe = (url) => {
+  const cached = knownLengths.get(url)
+  if (!cached) return null
+  if (cached.expiresAt < Date.now()) {
+    knownLengths.delete(url)
+    return null
+  }
+  return cached.probe
+}
+
+const cacheLengthProbe = ({ url, probe }) => {
+  if (probe.finished) knownLengths.set(url, { probe, expiresAt: Date.now() + FINISHED_LENGTH_CACHE_TTL })
+  if (MISSING_STATUSES.has(probe.status)) knownLengths.set(url, { probe, expiresAt: Date.now() + MISSING_ITEM_CACHE_TTL })
+}
+
+const createLimiter = (concurrency) => {
+  let active = 0
+  const waiting = []
+  const next = () => {
+    if (active >= concurrency || waiting.length === 0) return
+    active++
+    const { fn, resolve, reject } = waiting.shift()
+    fn().then(resolve, reject).finally(() => {
+      active--
+      next()
+    })
+  }
+  return (fn) => new Promise((resolve, reject) => {
+    waiting.push({ fn, resolve, reject })
+    next()
+  })
+}
+
 const isCurrentlyRecording = async (item) => {
-  // Fetch TV uses size <= 0 (typically -1) as an "in progress, size unknown" sentinel
-  // for items whose recording has started but not finished. Treat as definitely-recording
-  // without a HEAD probe — the item URL may still serve partial bytes, so HEAD would lie.
+  if (item.unavailable) {
+    debug('Item %s is listed but the box did not serve it; not recording.', item.title)
+    return false
+  }
   if (!Number.isFinite(item.size) || item.size <= 0) {
     debug('Item %s has non-positive size (%s); treating as currently recording.', item.title, item.size)
     return true
   }
-  if (item.size > 0 && item.size < MAX_OCTET_RECORDING - 1000000) {
+  if (item.size > 0 && item.size < MAX_OCTET_RECORDING - RECORDING_MARKER_MARGIN) {
     debug('Skipping recording check for %s, size (%s) seems final.', item.title, filesize(item.size, { spacer: '' }))
     return false
   }
@@ -1783,9 +1887,10 @@ const isCurrentlyRecording = async (item) => {
 }
 
 const downloadFile = async ({ item, filePath, progressBar, overwrite = false, idleTimeout = BODY_IDLE_TIMEOUT, connectTimeout = CONNECT_TIMEOUT, headerTimeout, onData = () => {}, onStreamClosed = () => {}, signal }) => {
-  // Refuse to download items whose UPnP listing reports a non-positive size
-  // (Fetch TV's "-1" sentinel for in-progress recordings) — the stream would
-  // serve truncated bytes and we'd silently end up with an incomplete file.
+  if (item.unavailable) {
+    logWarning(`Skipping ${item.title}, the box lists it but did not serve it.`)
+    return { recorded: false, unavailable: true, error: 'The box lists this recording but did not send it. It may have been deleted on the box.' }
+  }
   if (!Number.isFinite(item.size) || item.size <= 0) {
     logWarning(`Skipping ${item.title}, size is non-positive (${item.size}), likely still recording.`)
     return { recorded: false, stillRecording: true, warning: `Skipping item, size ${item.size} indicates it's currently recording` }
@@ -2826,4 +2931,4 @@ export {
   httpClient,
 }
 
-export const testInternals = { searchSsdp, parseSsdpResponse }
+export const testInternals = { searchSsdp, parseSsdpResponse, forgetKnownLengths: () => knownLengths.clear() }
