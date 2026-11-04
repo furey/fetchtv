@@ -19,8 +19,8 @@ import cliProgress from 'cli-progress'
 import { hideBin } from 'yargs/helpers'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
 
-import NodeSsdp from 'node-ssdp'
-const { Client: SsdpClient } = NodeSsdp
+import dgram from 'dgram'
+import os from 'os'
 
 const debug = debugLib('fetchtv')
 const debugXml = debugLib('fetchtv:xml')
@@ -44,6 +44,18 @@ const MIN_BROWSE_DELAY = 50
 const NO_NUMBER_DEFAULT = ''
 const REQUEST_TIMEOUT = 15000
 const DISCOVERY_TIMEOUT = 3000
+const SSDP_MULTICAST_ADDRESS = '239.255.255.250'
+const SSDP_PORT = 1900
+const SSDP_MULTICAST_TTL = 4
+const SSDP_M_SEARCH = [
+  'M-SEARCH * HTTP/1.1',
+  `HOST: ${SSDP_MULTICAST_ADDRESS}:${SSDP_PORT}`,
+  'ST: ssdp:all',
+  'MAN: "ssdp:discover"',
+  'MX: 3',
+  '',
+  ''
+].join('\r\n')
 const BROWSE_RETRY_DELAY = 1500
 const MAX_CONCURRENT_BROWSE = 5
 const ADAPTIVE_DELAY_FACTOR = 1.5
@@ -225,17 +237,12 @@ const main = async () => {
 
 const discoverFetchServers = async ({ timeoutMs = DISCOVERY_TIMEOUT } = {}) => {
   const locations = new Set()
-  const client = new SsdpClient()
-  client.on('response', (headers) => {
-    if (headers.LOCATION) locations.add(headers.LOCATION)
+  await searchSsdp({
+    timeoutMs,
+    onResponse: (headers) => {
+      if (headers.LOCATION) locations.add(headers.LOCATION)
+    }
   })
-
-  try {
-    client.search('ssdp:all')
-    await new Promise(resolve => setTimeout(resolve, timeoutMs))
-  } finally {
-    client.stop()
-  }
 
   if (locations.size === 0) return []
   const parsedLocations = await parseLocations([...locations])
@@ -249,20 +256,17 @@ const discoverFetch = async ({ ip, port }) => {
   if (ip) {
     locations.add(`http://${ip}:${port}/MediaServer.xml`)
   } else {
-    const client = new SsdpClient()
-    client.on('response', (headers) => {
-      if (headers.LOCATION) locations.add(headers.LOCATION)
-      debug('SSDP Response Headers: %O', headers)
-    })
-
     try {
-      client.search('ssdp:all')
-      await new Promise(resolve => setTimeout(resolve, DISCOVERY_TIMEOUT))
-      client.stop()
+      await searchSsdp({
+        timeoutMs: DISCOVERY_TIMEOUT,
+        onResponse: (headers) => {
+          if (headers.LOCATION) locations.add(headers.LOCATION)
+          debug('SSDP Response Headers: %O', headers)
+        }
+      })
     } catch (err) {
       spinner.fail('SSDP discovery failed.')
       logError(`SSDP discovery failed: ${err.message}`)
-      client.stop()
       return null
     }
   }
@@ -294,6 +298,70 @@ const discoverFetch = async ({ ip, port }) => {
   log(`Device Description: ${chalk.magentaBright(fetchServer.url)}`)
 
   return fetchServer
+}
+
+const searchSsdp = async ({ timeoutMs, onResponse }) => {
+  const sockets = createSsdpSockets()
+  try {
+    sockets.forEach(socket => socket.on('message', (message) => {
+      const headers = parseSsdpResponse(message)
+      if (headers) onResponse(headers)
+    }))
+    await Promise.all(sockets.map(bindSsdpSocket))
+    sockets.forEach(sendSsdpSearch)
+    await new Promise(resolve => setTimeout(resolve, timeoutMs))
+  } finally {
+    sockets.forEach(closeSsdpSocket)
+  }
+}
+
+const createSsdpSockets = () => {
+  const addresses = Object.values(os.networkInterfaces())
+    .flat()
+    .filter(entry => entry && !entry.internal && entry.family === 'IPv4')
+    .map(entry => entry.address)
+  if (addresses.length === 0) throw new Error('No sockets available, cannot start.')
+  return addresses.map(address => {
+    const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true })
+    socket.unref()
+    socket.on('error', (err) => debugNetwork('SSDP socket error on %s: %s', address, err.message))
+    return socket
+  })
+}
+
+const bindSsdpSocket = (socket) => new Promise(resolve => {
+  socket.once('error', resolve)
+  socket.bind(0, () => {
+    try {
+      socket.setMulticastTTL(SSDP_MULTICAST_TTL)
+    } catch (err) {
+      debugNetwork('Could not set SSDP multicast TTL: %s', err.message)
+    }
+    resolve()
+  })
+})
+
+const sendSsdpSearch = (socket) => {
+  socket.send(SSDP_M_SEARCH, SSDP_PORT, SSDP_MULTICAST_ADDRESS, (err) => {
+    if (err) debugNetwork('Could not send SSDP M-SEARCH: %s', err.message)
+  })
+}
+
+const closeSsdpSocket = (socket) => {
+  try {
+    socket.close()
+  } catch (err) {
+    debugNetwork('Could not close SSDP socket: %s', err.message)
+  }
+}
+
+const parseSsdpResponse = (message) => {
+  const [statusLine, ...headerLines] = message.toString().split('\r\n')
+  if (!/HTTP\/\d\.\d \d+ .*/.test(statusLine)) return null
+  return Object.fromEntries(headerLines
+    .map(line => line.match(/^([^:]+):\s*(.*)$/))
+    .filter(Boolean)
+    .map(([, name, value]) => [name.toUpperCase(), value]))
 }
 
 const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcome = () => {} }) => {
@@ -2687,6 +2755,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 export {
   discoverFetchServers,
   discoverFetch,
+  parseSsdpResponse,
   getFetchRecordings,
   downloadFile,
   isCurrentlyRecording,
