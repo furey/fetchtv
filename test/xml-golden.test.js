@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import nock from 'nock'
 
-import { parseXml, findNode, getFetchRecordings, discoverFetch } from '../fetchtv.js'
+import { parseXml, parseLocations, findNode, getFetchRecordings, discoverFetch } from '../fetchtv.js'
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const goldenPath = path.join(fixturesDir, 'golden', 'parsed.json')
@@ -42,7 +42,10 @@ const edgeCaseShows = browseEnvelope([
   ['21', 'Law &amp; Order: SVU'],
   ['22', 'true'],
   ['23', '007'],
-  ['24', 'Grey\'s Anatomy']
+  ['24', 'Grey\'s Anatomy'],
+  ['25', 'Grey&#39;s &#38; Co'],
+  ['26', 'Hex &#x27;quote&#x22; &#x3C;tag&#x3E; &#x26; &#60;&#62;&#34;'],
+  ['27', 'Kept &#X27; &#x3e; &#039; &#160; &#x2019; &amp;#39;']
 ].map(([id, title]) =>
   `<container id="${id}" parentID="0001" restricted="1"><dc:title>${title}</dc:title><upnp:class>object.container.storageFolder</upnp:class></container>`
 ).join(''))
@@ -56,13 +59,31 @@ const edgeCaseItems = browseEnvelope([
   '<item id="302" parentID="20" restricted="1"><dc:title>0x1F</dc:title><upnp:class>object.item.videoItem</upnp:class>',
   '<res protocolInfo="http-get:*:video/mpeg:*" size="000123" duration="00:45:00">http://192.168.1.10:49152/web/media/302.mpg</res></item>',
   '<item id="303" parentID="20" restricted="1"><dc:title>  Spaced   Title  </dc:title><upnp:class>object.item.audioItem</upnp:class>',
-  '<res protocolInfo="http-get:*:audio/mpeg:*" size="1e3" duration="1:02">http://192.168.1.10:49152/web/media/303.mp3</res></item>'
+  '<res protocolInfo="http-get:*:audio/mpeg:*" size="1e3" duration="1:02">http://192.168.1.10:49152/web/media/303.mp3</res></item>',
+  '<item id="304" parentID="25" restricted="1"><dc:title>Grey&#39;s Anatomy &#38; Co S2 E3</dc:title><dc:description>Double &amp;#39; and &amp;#38; stay escaped</dc:description><upnp:class>object.item.videoItem</upnp:class>',
+  '<res protocolInfo="http-get:*:video/mpeg-tts:*" size="2048" duration="0:44:00" parentTaskName="Grey&#39;s S2 E3">http://192.168.1.10:49152/web/media/304.ts?x=1&#38;y=2&#x26;z=3</res></item>'
 ].join(''))
+
+const numericOuterEnvelope = `<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:BrowseResponse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+      <Result>&#60;DIDL-Lite xmlns:dc=&#34;http://purl.org/dc/elements/1.1/&#34; xmlns=&#34;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&#34;&#62;&#60;item id=&#34;400&#34; parentID=&#34;20&#34;&#62;&#60;dc:title&#62;Tom &#38;amp; Jerry&#39;s&#60;/dc:title&#62;&#60;res size=&#34;1&#34;&#62;http://h/a.ts?x=1&#38;amp;y=2&#60;/res&#62;&#60;/item&#62;&#60;/DIDL-Lite&#62;</Result>
+      <NumberReturned>1</NumberReturned>
+    </u:BrowseResponse>
+  </s:Body>
+</s:Envelope>`
+
+const edgeCaseMediaServer = readFixture('media-server.xml')
+  .replace('<friendlyName>Fetch TV Test Box</friendlyName>', '<friendlyName>Jim&#39;s &#38; Kim&#x27;s Box</friendlyName>')
+  .replace('<modelName>Mighty</modelName>', '<modelName note="a&#34;b">Mighty &#x3C;3&#x3E;</modelName>')
 
 const edgeCaseFixtures = {
   'edge-root': edgeCaseRoot,
   'edge-shows': edgeCaseShows,
-  'edge-items': edgeCaseItems
+  'edge-items': edgeCaseItems,
+  'edge-numeric-outer': numericOuterEnvelope,
+  'edge-media-server': edgeCaseMediaServer
 }
 
 const fileFixtures = () => Object.fromEntries(
@@ -104,6 +125,12 @@ const listRecordings = async ({ host }) => {
   return { outcome, recordings }
 }
 
+const edgeCaseLocations = async () => {
+  const host = 'http://192.168.1.12:49152'
+  nock(host).persist().get('/MediaServer.xml').reply(200, edgeCaseMediaServer)
+  return parseLocations([`${host}/MediaServer.xml`])
+}
+
 const fixtureListing = () => listRecordings({ host: HOST })
 
 const edgeCaseListing = () => listRecordings({ host: 'http://192.168.1.11:49152' })
@@ -135,7 +162,8 @@ const buildActual = async () => {
     listings: {
       fixtures: await fixtureListing(),
       edgeCases: await edgeCaseListing()
-    }
+    },
+    locations: await edgeCaseLocations()
   })
 }
 

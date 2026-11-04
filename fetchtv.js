@@ -237,12 +237,17 @@ const main = async () => {
 
 const discoverFetchServers = async ({ timeoutMs = DISCOVERY_TIMEOUT } = {}) => {
   const locations = new Set()
-  await searchSsdp({
-    timeoutMs,
-    onResponse: (headers) => {
-      if (headers.LOCATION) locations.add(headers.LOCATION)
-    }
-  })
+  try {
+    await searchSsdp({
+      timeoutMs,
+      onResponse: (headers) => {
+        if (headers.LOCATION) locations.add(headers.LOCATION)
+      }
+    })
+  } catch (err) {
+    debugNetwork('SSDP discovery failed: %s', err.message)
+    return []
+  }
 
   if (locations.size === 0) return []
   const parsedLocations = await parseLocations([...locations])
@@ -300,26 +305,40 @@ const discoverFetch = async ({ ip, port }) => {
   return fetchServer
 }
 
-const searchSsdp = async ({ timeoutMs, onResponse }) => {
-  const sockets = createSsdpSockets()
+const searchSsdp = async ({
+  timeoutMs,
+  onResponse,
+  addresses = listExternalIpv4Addresses(),
+  target = { address: SSDP_MULTICAST_ADDRESS, port: SSDP_PORT }
+}) => {
+  const sockets = createSsdpSockets(addresses)
   try {
     sockets.forEach(socket => socket.on('message', (message) => {
       const headers = parseSsdpResponse(message)
-      if (headers) onResponse(headers)
+      if (headers) notifySsdpResponse({ onResponse, headers })
     }))
     await Promise.all(sockets.map(bindSsdpSocket))
-    sockets.forEach(sendSsdpSearch)
+    sockets.forEach(socket => sendSsdpSearch({ socket, target }))
     await new Promise(resolve => setTimeout(resolve, timeoutMs))
   } finally {
     sockets.forEach(closeSsdpSocket)
   }
 }
 
-const createSsdpSockets = () => {
-  const addresses = Object.values(os.networkInterfaces())
-    .flat()
-    .filter(entry => entry && !entry.internal && entry.family === 'IPv4')
-    .map(entry => entry.address)
+const listExternalIpv4Addresses = () => Object.values(os.networkInterfaces())
+  .flat()
+  .filter(entry => entry && !entry.internal && entry.family === 'IPv4')
+  .map(entry => entry.address)
+
+const notifySsdpResponse = ({ onResponse, headers }) => {
+  try {
+    onResponse(headers)
+  } catch (err) {
+    debugNetwork('SSDP response handler failed: %s', err.message)
+  }
+}
+
+const createSsdpSockets = (addresses) => {
   if (addresses.length === 0) throw new Error('No sockets available, cannot start.')
   return addresses.map(address => {
     const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true })
@@ -341,8 +360,8 @@ const bindSsdpSocket = (socket) => new Promise(resolve => {
   })
 })
 
-const sendSsdpSearch = (socket) => {
-  socket.send(SSDP_M_SEARCH, SSDP_PORT, SSDP_MULTICAST_ADDRESS, (err) => {
+const sendSsdpSearch = ({ socket, target }) => {
+  socket.send(SSDP_M_SEARCH, target.port, target.address, (err) => {
     if (err) debugNetwork('Could not send SSDP M-SEARCH: %s', err.message)
   })
 }
@@ -2303,6 +2322,24 @@ const removeLockFileAfterDownload = ({ item, lockFilePath }) => {
   }
 }
 
+const LEGACY_NUMERIC_REFERENCES = /&#(39|x27|62|x3E|60|x3C|34|x22|38|x26);/g
+const NAMED_REFERENCE_FOR = {
+  39: '&apos;',
+  x27: '&apos;',
+  62: '&gt;',
+  x3E: '&gt;',
+  60: '&lt;',
+  x3C: '&lt;',
+  34: '&quot;',
+  x22: '&quot;',
+  38: '&amp;',
+  x26: '&amp;'
+}
+
+const nameLegacyNumericReferences = (xmlString) => typeof xmlString === 'string'
+  ? xmlString.replace(LEGACY_NUMERIC_REFERENCES, (reference, code) => NAMED_REFERENCE_FOR[code])
+  : xmlString
+
 const parseXml = (xmlString) => {
   if (!xmlString || typeof xmlString !== 'string') return null
 
@@ -2317,7 +2354,7 @@ const parseXml = (xmlString) => {
   })
 
   try {
-    return xmlParser.parse(xmlString)
+    return xmlParser.parse(nameLegacyNumericReferences(xmlString))
   } catch (error) {
     logError(`XML parsing error: ${error.message}`)
     if (argv.debug) debugXml('XML String causing parse error: %s', xmlString.slice(0, 500) + '...')
@@ -2344,7 +2381,7 @@ const parseLocations = async (locationsUrls) => {
         logWarning(`Invalid XML from ${url}`)
         return null
       }
-      const xmlRoot = xmlParser.parse(response.data)
+      const xmlRoot = xmlParser.parse(nameLegacyNumericReferences(response.data))
       debugXml('Parsed XML from %s: %O', url, xmlRoot)
       const device = xmlRoot?.root?.device
       if (!device) {
@@ -2755,7 +2792,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 export {
   discoverFetchServers,
   discoverFetch,
-  parseSsdpResponse,
   getFetchRecordings,
   downloadFile,
   isCurrentlyRecording,
@@ -2789,3 +2825,5 @@ export {
   formatSaveSummary,
   httpClient,
 }
+
+export const testInternals = { searchSsdp, parseSsdpResponse }
