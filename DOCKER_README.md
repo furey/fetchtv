@@ -12,7 +12,7 @@ No Fetch credentials or cloud account required.
 Based on [`lingfish/fetchtv-cli`](https://github.com/lingfish/fetchtv-cli) (Python) which is based on [`jinxo13/FetchTV-Helpers`](https://github.com/jinxo13/FetchTV-Helpers) (also Python).
 
 > [!NOTE]<br>
-> Fetch's [Gen 3 Extended Service Levy](https://news.fetchtv.com.au/extended-service-levy-1) means Mini Gen 3 and Mighty Gen 3 owners should copy their recordings off the box before `1 November 2026`. `fetchtv` keeps working for that: it's LAN-only and needs no Fetch account. To record free-to-air without Fetch at all, see [freetvarr](https://github.com/furey/freetvarr).
+> Fetch's [Gen 3 Extended Service Levy](https://main.fetchtv.com.au/gen-3-extended-service-levy) means Mini Gen 3 and Mighty Gen 3 owners should copy their recordings off the box before `30 November 2026`; Fetch suspends boxes that have not opted in from `1 December 2026`. `fetchtv` keeps working for that: it's LAN-only and needs no Fetch account. To record free-to-air without Fetch at all, see [freetvarr](https://github.com/furey/freetvarr).
 
 ## Contents
 
