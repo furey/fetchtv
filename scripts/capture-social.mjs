@@ -199,8 +199,8 @@ body {
 }
 h1 {
   font-size: ${l.headlineSize}px;
-  font-weight: 800;
-  line-height: 1.2;
+  font-weight: 400;
+  line-height: 1.3;
   letter-spacing: -0.015em;
   text-wrap: balance;
 }
