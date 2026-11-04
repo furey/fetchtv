@@ -136,6 +136,7 @@ const fixtureListing = () => listRecordings({ host: HOST })
 const edgeCaseListing = () => listRecordings({ host: 'http://192.168.1.11:49152' })
 
 const buildActual = async () => {
+  nock('http://192.168.1.10:49152').persist().head(/.*/).reply(200, '', { 'content-length': '4398046510080' })
   serveBox({
     host: HOST,
     fixtureFor: (objectId) => (
@@ -170,6 +171,8 @@ const buildActual = async () => {
 beforeEach(() => {
   nock.cleanAll()
 })
+
+nock.disableNetConnect()
 
 after(() => {
   nock.restore()
