@@ -1,0 +1,1605 @@
+{
+  "parsed": {
+    "browse-empty.xml": {
+      "outer": {
+        "?xml": {
+          "@_version": {
+            "number": "1"
+          },
+          "@_encoding": "utf-8"
+        },
+        "Envelope": {
+          "Body": {
+            "BrowseResponse": {
+              "Result": "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\"></DIDL-Lite>",
+              "NumberReturned": {
+                "number": "0"
+              },
+              "TotalMatches": {
+                "number": "0"
+              },
+              "UpdateID": {
+                "number": "1"
+              }
+            }
+          },
+          "@_encodingStyle": "http://schemas.xmlsoap.org/soap/encoding/"
+        }
+      },
+      "inner": {
+        "DIDL-Lite": ""
+      }
+    },
+    "browse-recordings.xml": {
+      "outer": {
+        "?xml": {
+          "@_version": {
+            "number": "1"
+          },
+          "@_encoding": "utf-8"
+        },
+        "Envelope": {
+          "Body": {
+            "BrowseResponse": {
+              "Result": "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\"><container id=\"10\" parentID=\"1\" restricted=\"1\"><dc:title>Bluey</dc:title><upnp:class>object.container</upnp:class></container><container id=\"11\" parentID=\"1\" restricted=\"1\"><dc:title>The Amazing Race</dc:title><upnp:class>object.container</upnp:class></container><container id=\"12\" parentID=\"1\" restricted=\"1\"><dc:title>MasterChef Australia</dc:title><upnp:class>object.container</upnp:class></container></DIDL-Lite>",
+              "NumberReturned": {
+                "number": "3"
+              },
+              "TotalMatches": {
+                "number": "3"
+              },
+              "UpdateID": {
+                "number": "1"
+              }
+            }
+          },
+          "@_encodingStyle": "http://schemas.xmlsoap.org/soap/encoding/"
+        }
+      },
+      "inner": {
+        "DIDL-Lite": {
+          "container": [
+            {
+              "title": "Bluey",
+              "class": "object.container",
+              "@_id": {
+                "number": "10"
+              },
+              "@_parentID": {
+                "number": "1"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": "The Amazing Race",
+              "class": "object.container",
+              "@_id": {
+                "number": "11"
+              },
+              "@_parentID": {
+                "number": "1"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": "MasterChef Australia",
+              "class": "object.container",
+              "@_id": {
+                "number": "12"
+              },
+              "@_parentID": {
+                "number": "1"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "browse-root.xml": {
+      "outer": {
+        "?xml": {
+          "@_version": {
+            "number": "1"
+          },
+          "@_encoding": "utf-8"
+        },
+        "Envelope": {
+          "Body": {
+            "BrowseResponse": {
+              "Result": "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\"><container id=\"1\" parentID=\"0\" restricted=\"1\"><dc:title>Recordings</dc:title><upnp:class>object.container</upnp:class></container><container id=\"2\" parentID=\"0\" restricted=\"1\"><dc:title>Live TV</dc:title><upnp:class>object.container</upnp:class></container></DIDL-Lite>",
+              "NumberReturned": {
+                "number": "2"
+              },
+              "TotalMatches": {
+                "number": "2"
+              },
+              "UpdateID": {
+                "number": "1"
+              }
+            }
+          },
+          "@_encodingStyle": "http://schemas.xmlsoap.org/soap/encoding/"
+        }
+      },
+      "inner": {
+        "DIDL-Lite": {
+          "container": [
+            {
+              "title": "Recordings",
+              "class": "object.container",
+              "@_id": {
+                "number": "1"
+              },
+              "@_parentID": {
+                "number": "0"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": "Live TV",
+              "class": "object.container",
+              "@_id": {
+                "number": "2"
+              },
+              "@_parentID": {
+                "number": "0"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "browse-show-items.xml": {
+      "outer": {
+        "?xml": {
+          "@_version": {
+            "number": "1"
+          },
+          "@_encoding": "utf-8"
+        },
+        "Envelope": {
+          "Body": {
+            "BrowseResponse": {
+              "Result": "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\"><item id=\"100\" parentID=\"10\" restricted=\"1\"><dc:title>S1 E1 - Pilot</dc:title><dc:description>Episode 1 of Season 1</dc:description><upnp:class>object.item.videoItem</upnp:class><res protocolInfo=\"http-get:*:video/mpeg-tts:DLNA.ORG_PN=AVC_TS_HD_AC3;DLNA.ORG_OP=01\" size=\"1073741824\" duration=\"1:25:30\" parentTaskName=\"Bluey S1 E1\">http://192.168.1.10:49152/item/100</res></item><item id=\"101\" parentID=\"10\" restricted=\"1\"><dc:title>S1 E2 - Hospital</dc:title><dc:description>Episode 2 of Season 1</dc:description><upnp:class>object.item.videoItem</upnp:class><res protocolInfo=\"http-get:*:video/mp4:DLNA.ORG_PN=MP4\" size=\"536870912\" duration=\"0:24:15\">http://192.168.1.10:49152/item/101</res></item><item id=\"102\" parentID=\"10\" restricted=\"1\"><dc:title>In Progress Recording</dc:title><dc:description>Currently recording</dc:description><upnp:class>object.item.videoItem</upnp:class><res protocolInfo=\"http-get:*:video/mpeg-tts:*\" size=\"-1\" duration=\"0:00:00\">http://192.168.1.10:49152/item/102</res></item></DIDL-Lite>",
+              "NumberReturned": {
+                "number": "3"
+              },
+              "TotalMatches": {
+                "number": "3"
+              },
+              "UpdateID": {
+                "number": "1"
+              }
+            }
+          },
+          "@_encodingStyle": "http://schemas.xmlsoap.org/soap/encoding/"
+        }
+      },
+      "inner": {
+        "DIDL-Lite": {
+          "item": [
+            {
+              "title": "S1 E1 - Pilot",
+              "description": "Episode 1 of Season 1",
+              "class": "object.item.videoItem",
+              "res": {
+                "#text": "http://192.168.1.10:49152/item/100",
+                "@_protocolInfo": "http-get:*:video/mpeg-tts:DLNA.ORG_PN=AVC_TS_HD_AC3;DLNA.ORG_OP=01",
+                "@_size": {
+                  "number": "1073741824"
+                },
+                "@_duration": "1:25:30",
+                "@_parentTaskName": "Bluey S1 E1"
+              },
+              "@_id": {
+                "number": "100"
+              },
+              "@_parentID": {
+                "number": "10"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": "S1 E2 - Hospital",
+              "description": "Episode 2 of Season 1",
+              "class": "object.item.videoItem",
+              "res": {
+                "#text": "http://192.168.1.10:49152/item/101",
+                "@_protocolInfo": "http-get:*:video/mp4:DLNA.ORG_PN=MP4",
+                "@_size": {
+                  "number": "536870912"
+                },
+                "@_duration": "0:24:15"
+              },
+              "@_id": {
+                "number": "101"
+              },
+              "@_parentID": {
+                "number": "10"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": "In Progress Recording",
+              "description": "Currently recording",
+              "class": "object.item.videoItem",
+              "res": {
+                "#text": "http://192.168.1.10:49152/item/102",
+                "@_protocolInfo": "http-get:*:video/mpeg-tts:*",
+                "@_size": {
+                  "number": "-1"
+                },
+                "@_duration": "0:00:00"
+              },
+              "@_id": {
+                "number": "102"
+              },
+              "@_parentID": {
+                "number": "10"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "cancelled-browse-empty.xml": {
+      "outer": {
+        "Envelope": {
+          "Body": {
+            "BrowseResponse": {
+              "Result": "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\"></DIDL-Lite>",
+              "NumberReturned": {
+                "number": "0"
+              },
+              "TotalMatches": {
+                "number": "0"
+              },
+              "UpdateID": {
+                "number": "0"
+              }
+            }
+          },
+          "@_encodingStyle": "http://schemas.xmlsoap.org/soap/encoding/"
+        }
+      },
+      "inner": {
+        "DIDL-Lite": ""
+      }
+    },
+    "cancelled-browse-root.xml": {
+      "outer": {
+        "Envelope": {
+          "Body": {
+            "BrowseResponse": {
+              "Result": "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\"><container id=\"1\" parentID=\"0\" childCount=\"0\" restricted=\"true\" searchable=\"true\"><upnp:class>object.container.storageFolder</upnp:class><dc:title>Recordings</dc:title></container><container id=\"2\" parentID=\"0\" childCount=\"0\" restricted=\"true\" searchable=\"true\"><upnp:class>object.container.storageFolder</upnp:class><dc:title>Movies</dc:title></container></DIDL-Lite>",
+              "NumberReturned": {
+                "number": "2"
+              },
+              "TotalMatches": {
+                "number": "2"
+              },
+              "UpdateID": {
+                "number": "2"
+              }
+            }
+          },
+          "@_encodingStyle": "http://schemas.xmlsoap.org/soap/encoding/"
+        }
+      },
+      "inner": {
+        "DIDL-Lite": {
+          "container": [
+            {
+              "class": "object.container.storageFolder",
+              "title": "Recordings",
+              "@_id": {
+                "number": "1"
+              },
+              "@_parentID": {
+                "number": "0"
+              },
+              "@_childCount": {
+                "number": "0"
+              },
+              "@_restricted": {
+                "boolean": "true"
+              },
+              "@_searchable": {
+                "boolean": "true"
+              }
+            },
+            {
+              "class": "object.container.storageFolder",
+              "title": "Movies",
+              "@_id": {
+                "number": "2"
+              },
+              "@_parentID": {
+                "number": "0"
+              },
+              "@_childCount": {
+                "number": "0"
+              },
+              "@_restricted": {
+                "boolean": "true"
+              },
+              "@_searchable": {
+                "boolean": "true"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "cancelled-media-server.xml": {
+      "outer": {
+        "?xml": {
+          "@_version": {
+            "number": "1"
+          }
+        },
+        "root": {
+          "specVersion": {
+            "major": {
+              "number": "1"
+            },
+            "minor": {
+              "number": "0"
+            }
+          },
+          "device": {
+            "deviceType": "urn:schemas-upnp-org:device:MediaServer:1",
+            "friendlyName": "STB 192.168.86.224",
+            "manufacturer": "Fetch Technologies Co., Ltd",
+            "manufacturerURL": "http://www.fetch.com/",
+            "modelDescription": "DLNA1.5 MediaServer",
+            "modelName": "Fetch DLNA1.5 DMS",
+            "modelNumber": {
+              "number": "1"
+            },
+            "modelURL": "http://www.fetch.com/",
+            "serialNumber": {
+              "number": "1"
+            },
+            "UDN": "uuid:898f9738-d930-4db4-a3cf-bc14efe5446c",
+            "presentationURL": "presentation.html",
+            "iconList": {
+              "icon": {
+                "mimetype": "image/jpeg",
+                "width": {
+                  "number": "120"
+                },
+                "height": {
+                  "number": "120"
+                },
+                "depth": {
+                  "number": "24"
+                },
+                "url": "/DMS_LOGO.jpg"
+              }
+            },
+            "serviceList": {
+              "service": [
+                {
+                  "serviceType": "urn:schemas-upnp-org:service:ContentDirectory:1",
+                  "serviceId": "urn:upnp-org:serviceId:ContentDirectory",
+                  "SCPDURL": "/web/cds.xml",
+                  "controlURL": "/web/cds_control",
+                  "eventSubURL": "/web/cds_event"
+                },
+                {
+                  "serviceType": "urn:schemas-upnp-org:service:ConnectionManager:1",
+                  "serviceId": "urn:upnp-org:serviceId:ConnectionManager",
+                  "SCPDURL": "/web/cms.xml",
+                  "controlURL": "/web/cms_control",
+                  "eventSubURL": "/web/cms_event"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "inner": null
+    },
+    "media-server.xml": {
+      "outer": {
+        "?xml": {
+          "@_version": {
+            "number": "1"
+          },
+          "@_encoding": "utf-8"
+        },
+        "root": {
+          "specVersion": {
+            "major": {
+              "number": "1"
+            },
+            "minor": {
+              "number": "0"
+            }
+          },
+          "device": {
+            "deviceType": "urn:schemas-upnp-org:device:MediaServer:1",
+            "friendlyName": "Fetch TV Test Box",
+            "manufacturer": "Fetch TV",
+            "manufacturerURL": "http://www.fetch.com/",
+            "modelDescription": "Fetch TV Set Top Box",
+            "modelName": "Mighty",
+            "modelNumber": "FTV-1000",
+            "UDN": "uuid:00000000-0000-0000-0000-000000000001",
+            "serviceList": {
+              "service": {
+                "serviceType": "urn:schemas-upnp-org:service:ContentDirectory:1",
+                "serviceId": "urn:upnp-org:serviceId:ContentDirectory",
+                "controlURL": "/upnp/control/ContentDirectory",
+                "eventSubURL": "/upnp/event/ContentDirectory",
+                "SCPDURL": "/ContentDirectory.xml"
+              }
+            }
+          }
+        }
+      },
+      "inner": null
+    },
+    "upnp-error-501.xml": {
+      "outer": {
+        "Envelope": {
+          "Body": {
+            "Fault": {
+              "faultcode": "s:Client",
+              "faultstring": "UPnPError",
+              "detail": {
+                "UPnPError": {
+                  "errorCode": {
+                    "number": "501"
+                  },
+                  "errorDescription": "Action Failed"
+                }
+              }
+            }
+          },
+          "@_encodingStyle": "http://schemas.xmlsoap.org/soap/encoding/"
+        }
+      },
+      "inner": null
+    },
+    "edge-root": {
+      "outer": {
+        "?xml": {
+          "@_version": {
+            "number": "1"
+          },
+          "@_encoding": "utf-8"
+        },
+        "Envelope": {
+          "Body": {
+            "BrowseResponse": {
+              "Result": "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" xmlns:dlna=\"urn:schemas-dlna-org:metadata-1-0/\" xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\"><container id=\"0001\" parentID=\"0\" restricted=\"1\" searchable=\"1\" childCount=\"3\"><dc:title>Recordings</dc:title><upnp:class>object.container</upnp:class></container></DIDL-Lite>",
+              "NumberReturned": {
+                "number": "1"
+              },
+              "TotalMatches": {
+                "number": "1"
+              },
+              "UpdateID": {
+                "number": "7"
+              }
+            }
+          },
+          "@_encodingStyle": "http://schemas.xmlsoap.org/soap/encoding/"
+        }
+      },
+      "inner": {
+        "DIDL-Lite": {
+          "container": {
+            "title": "Recordings",
+            "class": "object.container",
+            "@_id": {
+              "number": "1"
+            },
+            "@_parentID": {
+              "number": "0"
+            },
+            "@_restricted": {
+              "number": "1"
+            },
+            "@_searchable": {
+              "number": "1"
+            },
+            "@_childCount": {
+              "number": "3"
+            }
+          }
+        }
+      }
+    },
+    "edge-shows": {
+      "outer": {
+        "?xml": {
+          "@_version": {
+            "number": "1"
+          },
+          "@_encoding": "utf-8"
+        },
+        "Envelope": {
+          "Body": {
+            "BrowseResponse": {
+              "Result": "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" xmlns:dlna=\"urn:schemas-dlna-org:metadata-1-0/\" xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\"><container id=\"20\" parentID=\"0001\" restricted=\"1\"><dc:title>1917</dc:title><upnp:class>object.container.storageFolder</upnp:class></container><container id=\"21\" parentID=\"0001\" restricted=\"1\"><dc:title>Law &amp; Order: SVU</dc:title><upnp:class>object.container.storageFolder</upnp:class></container><container id=\"22\" parentID=\"0001\" restricted=\"1\"><dc:title>true</dc:title><upnp:class>object.container.storageFolder</upnp:class></container><container id=\"23\" parentID=\"0001\" restricted=\"1\"><dc:title>007</dc:title><upnp:class>object.container.storageFolder</upnp:class></container><container id=\"24\" parentID=\"0001\" restricted=\"1\"><dc:title>Grey's Anatomy</dc:title><upnp:class>object.container.storageFolder</upnp:class></container></DIDL-Lite>",
+              "NumberReturned": {
+                "number": "1"
+              },
+              "TotalMatches": {
+                "number": "1"
+              },
+              "UpdateID": {
+                "number": "7"
+              }
+            }
+          },
+          "@_encodingStyle": "http://schemas.xmlsoap.org/soap/encoding/"
+        }
+      },
+      "inner": {
+        "DIDL-Lite": {
+          "container": [
+            {
+              "title": {
+                "number": "1917"
+              },
+              "class": "object.container.storageFolder",
+              "@_id": {
+                "number": "20"
+              },
+              "@_parentID": {
+                "number": "1"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": "Law & Order: SVU",
+              "class": "object.container.storageFolder",
+              "@_id": {
+                "number": "21"
+              },
+              "@_parentID": {
+                "number": "1"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": {
+                "boolean": "true"
+              },
+              "class": "object.container.storageFolder",
+              "@_id": {
+                "number": "22"
+              },
+              "@_parentID": {
+                "number": "1"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": {
+                "number": "7"
+              },
+              "class": "object.container.storageFolder",
+              "@_id": {
+                "number": "23"
+              },
+              "@_parentID": {
+                "number": "1"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": "Grey's Anatomy",
+              "class": "object.container.storageFolder",
+              "@_id": {
+                "number": "24"
+              },
+              "@_parentID": {
+                "number": "1"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "edge-items": {
+      "outer": {
+        "?xml": {
+          "@_version": {
+            "number": "1"
+          },
+          "@_encoding": "utf-8"
+        },
+        "Envelope": {
+          "Body": {
+            "BrowseResponse": {
+              "Result": "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" xmlns:dlna=\"urn:schemas-dlna-org:metadata-1-0/\" xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\"><item id=\"300\" parentID=\"20\" restricted=\"1\"><dc:title>1917</dc:title><dc:description>  War film &amp; &quot;epic&quot; &lt;HD&gt; &#169; 2019 &#x2014; ok  </dc:description><upnp:class>object.item.videoItem.movie</upnp:class><dc:date>2026-10-31T20:30:00</dc:date><upnp:channelName>7mate</upnp:channelName><res protocolInfo=\"http-get:*:video/mpeg-tts:DLNA.ORG_PN=AVC_TS_HD_AC3;DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01700000000000000000000000000000\" size=\"4823449600\" duration=\"2:00:13.000\" bitrate=\"669184\" resolution=\"1920x1080\" dlna:profileID=\"AVC_TS_HD_AC3\">http://192.168.1.10:49152/web/media/300.ts?x=1&amp;y=2</res><res protocolInfo=\"http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_TN\" size=\"1024\">http://192.168.1.10:49152/thumb/300.jpg</res></item><item id=\"301\" parentID=\"20\" restricted=\"1\"><dc:title>S01E02 - 0.5e3</dc:title><dc:description></dc:description><upnp:class>object.item.videoItem</upnp:class><res protocolInfo=\"http-get:*:video/mpeg-tts:*\" size=\"-1\" duration=\"0:00:00\" parentTaskName=\"Show S12 E03\">http://192.168.1.10:49152/web/media/301.ts</res></item><item id=\"302\" parentID=\"20\" restricted=\"1\"><dc:title>0x1F</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo=\"http-get:*:video/mpeg:*\" size=\"000123\" duration=\"00:45:00\">http://192.168.1.10:49152/web/media/302.mpg</res></item><item id=\"303\" parentID=\"20\" restricted=\"1\"><dc:title>  Spaced   Title  </dc:title><upnp:class>object.item.audioItem</upnp:class><res protocolInfo=\"http-get:*:audio/mpeg:*\" size=\"1e3\" duration=\"1:02\">http://192.168.1.10:49152/web/media/303.mp3</res></item></DIDL-Lite>",
+              "NumberReturned": {
+                "number": "1"
+              },
+              "TotalMatches": {
+                "number": "1"
+              },
+              "UpdateID": {
+                "number": "7"
+              }
+            }
+          },
+          "@_encodingStyle": "http://schemas.xmlsoap.org/soap/encoding/"
+        }
+      },
+      "inner": {
+        "DIDL-Lite": {
+          "item": [
+            {
+              "title": {
+                "number": "1917"
+              },
+              "description": "War film & \"epic\" <HD> &#169; 2019 &#x2014; ok",
+              "class": "object.item.videoItem.movie",
+              "date": "2026-10-31T20:30:00",
+              "channelName": "7mate",
+              "res": [
+                {
+                  "#text": "http://192.168.1.10:49152/web/media/300.ts?x=1&y=2",
+                  "@_protocolInfo": "http-get:*:video/mpeg-tts:DLNA.ORG_PN=AVC_TS_HD_AC3;DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01700000000000000000000000000000",
+                  "@_size": {
+                    "number": "4823449600"
+                  },
+                  "@_duration": "2:00:13.000",
+                  "@_bitrate": {
+                    "number": "669184"
+                  },
+                  "@_resolution": "1920x1080",
+                  "@_profileID": "AVC_TS_HD_AC3"
+                },
+                {
+                  "#text": "http://192.168.1.10:49152/thumb/300.jpg",
+                  "@_protocolInfo": "http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_TN",
+                  "@_size": {
+                    "number": "1024"
+                  }
+                }
+              ],
+              "@_id": {
+                "number": "300"
+              },
+              "@_parentID": {
+                "number": "20"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": "S01E02 - 0.5e3",
+              "description": "",
+              "class": "object.item.videoItem",
+              "res": {
+                "#text": "http://192.168.1.10:49152/web/media/301.ts",
+                "@_protocolInfo": "http-get:*:video/mpeg-tts:*",
+                "@_size": {
+                  "number": "-1"
+                },
+                "@_duration": "0:00:00",
+                "@_parentTaskName": "Show S12 E03"
+              },
+              "@_id": {
+                "number": "301"
+              },
+              "@_parentID": {
+                "number": "20"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": {
+                "number": "31"
+              },
+              "class": "object.item.videoItem",
+              "res": {
+                "#text": "http://192.168.1.10:49152/web/media/302.mpg",
+                "@_protocolInfo": "http-get:*:video/mpeg:*",
+                "@_size": {
+                  "number": "123"
+                },
+                "@_duration": "00:45:00"
+              },
+              "@_id": {
+                "number": "302"
+              },
+              "@_parentID": {
+                "number": "20"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            },
+            {
+              "title": "Spaced   Title",
+              "class": "object.item.audioItem",
+              "res": {
+                "#text": "http://192.168.1.10:49152/web/media/303.mp3",
+                "@_protocolInfo": "http-get:*:audio/mpeg:*",
+                "@_size": {
+                  "number": "1000"
+                },
+                "@_duration": "1:02"
+              },
+              "@_id": {
+                "number": "303"
+              },
+              "@_parentID": {
+                "number": "20"
+              },
+              "@_restricted": {
+                "number": "1"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "listings": {
+    "fixtures": {
+      "outcome": "ok",
+      "recordings": [
+        {
+          "title": "Bluey",
+          "id": {
+            "number": "10"
+          },
+          "parent_id": {
+            "number": "1"
+          },
+          "items": [
+            {
+              "type": "object.item.videoItem",
+              "title": "S1 E1 - Pilot",
+              "id": {
+                "number": "100"
+              },
+              "parent_id": {
+                "number": "10"
+              },
+              "description": "Episode 1 of Season 1",
+              "url": "http://192.168.1.10:49152/item/100",
+              "size": {
+                "number": "1073741824"
+              },
+              "duration": {
+                "number": "5130"
+              },
+              "show_title": "Bluey",
+              "season_number": "1",
+              "season_number_padded": "01",
+              "episode_number": "1",
+              "episode_number_padded": "01",
+              "ext": "ts",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "S1 E2 - Hospital",
+              "id": {
+                "number": "101"
+              },
+              "parent_id": {
+                "number": "10"
+              },
+              "description": "Episode 2 of Season 1",
+              "url": "http://192.168.1.10:49152/item/101",
+              "size": {
+                "number": "536870912"
+              },
+              "duration": {
+                "number": "1455"
+              },
+              "show_title": "Bluey",
+              "season_number": "1",
+              "season_number_padded": "01",
+              "episode_number": "2",
+              "episode_number_padded": "02",
+              "ext": "mp4",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "In Progress Recording",
+              "id": {
+                "number": "102"
+              },
+              "parent_id": {
+                "number": "10"
+              },
+              "description": "Currently recording",
+              "url": "http://192.168.1.10:49152/item/102",
+              "size": {
+                "number": "-1"
+              },
+              "duration": {
+                "number": "0"
+              },
+              "show_title": "Bluey",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "movie"
+            }
+          ]
+        },
+        {
+          "title": "The Amazing Race",
+          "id": {
+            "number": "11"
+          },
+          "parent_id": {
+            "number": "1"
+          },
+          "items": [
+            {
+              "type": "object.item.videoItem",
+              "title": "S1 E1 - Pilot",
+              "id": {
+                "number": "100"
+              },
+              "parent_id": {
+                "number": "10"
+              },
+              "description": "Episode 1 of Season 1",
+              "url": "http://192.168.1.10:49152/item/100",
+              "size": {
+                "number": "1073741824"
+              },
+              "duration": {
+                "number": "5130"
+              },
+              "show_title": "The Amazing Race",
+              "season_number": "1",
+              "season_number_padded": "01",
+              "episode_number": "1",
+              "episode_number_padded": "01",
+              "ext": "ts",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "S1 E2 - Hospital",
+              "id": {
+                "number": "101"
+              },
+              "parent_id": {
+                "number": "10"
+              },
+              "description": "Episode 2 of Season 1",
+              "url": "http://192.168.1.10:49152/item/101",
+              "size": {
+                "number": "536870912"
+              },
+              "duration": {
+                "number": "1455"
+              },
+              "show_title": "The Amazing Race",
+              "season_number": "1",
+              "season_number_padded": "01",
+              "episode_number": "2",
+              "episode_number_padded": "02",
+              "ext": "mp4",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "In Progress Recording",
+              "id": {
+                "number": "102"
+              },
+              "parent_id": {
+                "number": "10"
+              },
+              "description": "Currently recording",
+              "url": "http://192.168.1.10:49152/item/102",
+              "size": {
+                "number": "-1"
+              },
+              "duration": {
+                "number": "0"
+              },
+              "show_title": "The Amazing Race",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "movie"
+            }
+          ]
+        },
+        {
+          "title": "MasterChef Australia",
+          "id": {
+            "number": "12"
+          },
+          "parent_id": {
+            "number": "1"
+          },
+          "items": [
+            {
+              "type": "object.item.videoItem",
+              "title": "S1 E1 - Pilot",
+              "id": {
+                "number": "100"
+              },
+              "parent_id": {
+                "number": "10"
+              },
+              "description": "Episode 1 of Season 1",
+              "url": "http://192.168.1.10:49152/item/100",
+              "size": {
+                "number": "1073741824"
+              },
+              "duration": {
+                "number": "5130"
+              },
+              "show_title": "MasterChef Australia",
+              "season_number": "1",
+              "season_number_padded": "01",
+              "episode_number": "1",
+              "episode_number_padded": "01",
+              "ext": "ts",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "S1 E2 - Hospital",
+              "id": {
+                "number": "101"
+              },
+              "parent_id": {
+                "number": "10"
+              },
+              "description": "Episode 2 of Season 1",
+              "url": "http://192.168.1.10:49152/item/101",
+              "size": {
+                "number": "536870912"
+              },
+              "duration": {
+                "number": "1455"
+              },
+              "show_title": "MasterChef Australia",
+              "season_number": "1",
+              "season_number_padded": "01",
+              "episode_number": "2",
+              "episode_number_padded": "02",
+              "ext": "mp4",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "In Progress Recording",
+              "id": {
+                "number": "102"
+              },
+              "parent_id": {
+                "number": "10"
+              },
+              "description": "Currently recording",
+              "url": "http://192.168.1.10:49152/item/102",
+              "size": {
+                "number": "-1"
+              },
+              "duration": {
+                "number": "0"
+              },
+              "show_title": "MasterChef Australia",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "movie"
+            }
+          ]
+        }
+      ]
+    },
+    "edgeCases": {
+      "outcome": "ok",
+      "recordings": [
+        {
+          "title": "1917",
+          "id": {
+            "number": "20"
+          },
+          "parent_id": {
+            "number": "1"
+          },
+          "items": [
+            {
+              "type": "object.item.videoItem.movie",
+              "title": "1917",
+              "id": {
+                "number": "300"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "War film & \"epic\" <HD> &#169; 2019 &#x2014; ok",
+              "url": "http://192.168.1.10:49152/web/media/300.ts?x=1&y=2",
+              "size": {
+                "number": "4823449600"
+              },
+              "duration": {
+                "number": "7213"
+              },
+              "show_title": "1917",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "movie"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "S01E02 - 0.5e3",
+              "id": {
+                "number": "301"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/301.ts",
+              "size": {
+                "number": "-1"
+              },
+              "duration": {
+                "number": "0"
+              },
+              "show_title": "1917",
+              "season_number": "01",
+              "season_number_padded": "01",
+              "episode_number": "02",
+              "episode_number_padded": "02",
+              "ext": "ts",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "31",
+              "id": {
+                "number": "302"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/302.mpg",
+              "size": {
+                "number": "123"
+              },
+              "duration": {
+                "number": "2700"
+              },
+              "show_title": "1917",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "mpg",
+              "item_type": "movie"
+            },
+            {
+              "type": "object.item.audioItem",
+              "title": "Spaced   Title",
+              "id": {
+                "number": "303"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/303.mp3",
+              "size": {
+                "number": "1000"
+              },
+              "duration": {
+                "number": "62"
+              },
+              "show_title": "1917",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "other"
+            }
+          ]
+        },
+        {
+          "title": "Law & Order: SVU",
+          "id": {
+            "number": "21"
+          },
+          "parent_id": {
+            "number": "1"
+          },
+          "items": [
+            {
+              "type": "object.item.videoItem.movie",
+              "title": "1917",
+              "id": {
+                "number": "300"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "War film & \"epic\" <HD> &#169; 2019 &#x2014; ok",
+              "url": "http://192.168.1.10:49152/web/media/300.ts?x=1&y=2",
+              "size": {
+                "number": "4823449600"
+              },
+              "duration": {
+                "number": "7213"
+              },
+              "show_title": "Law & Order: SVU",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "movie"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "S01E02 - 0.5e3",
+              "id": {
+                "number": "301"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/301.ts",
+              "size": {
+                "number": "-1"
+              },
+              "duration": {
+                "number": "0"
+              },
+              "show_title": "Law & Order: SVU",
+              "season_number": "01",
+              "season_number_padded": "01",
+              "episode_number": "02",
+              "episode_number_padded": "02",
+              "ext": "ts",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "31",
+              "id": {
+                "number": "302"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/302.mpg",
+              "size": {
+                "number": "123"
+              },
+              "duration": {
+                "number": "2700"
+              },
+              "show_title": "Law & Order: SVU",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "mpg",
+              "item_type": "movie"
+            },
+            {
+              "type": "object.item.audioItem",
+              "title": "Spaced   Title",
+              "id": {
+                "number": "303"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/303.mp3",
+              "size": {
+                "number": "1000"
+              },
+              "duration": {
+                "number": "62"
+              },
+              "show_title": "Law & Order: SVU",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "other"
+            }
+          ]
+        },
+        {
+          "title": "true",
+          "id": {
+            "number": "22"
+          },
+          "parent_id": {
+            "number": "1"
+          },
+          "items": [
+            {
+              "type": "object.item.videoItem.movie",
+              "title": "1917",
+              "id": {
+                "number": "300"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "War film & \"epic\" <HD> &#169; 2019 &#x2014; ok",
+              "url": "http://192.168.1.10:49152/web/media/300.ts?x=1&y=2",
+              "size": {
+                "number": "4823449600"
+              },
+              "duration": {
+                "number": "7213"
+              },
+              "show_title": "true",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "movie"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "S01E02 - 0.5e3",
+              "id": {
+                "number": "301"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/301.ts",
+              "size": {
+                "number": "-1"
+              },
+              "duration": {
+                "number": "0"
+              },
+              "show_title": "true",
+              "season_number": "01",
+              "season_number_padded": "01",
+              "episode_number": "02",
+              "episode_number_padded": "02",
+              "ext": "ts",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "31",
+              "id": {
+                "number": "302"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/302.mpg",
+              "size": {
+                "number": "123"
+              },
+              "duration": {
+                "number": "2700"
+              },
+              "show_title": "true",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "mpg",
+              "item_type": "movie"
+            },
+            {
+              "type": "object.item.audioItem",
+              "title": "Spaced   Title",
+              "id": {
+                "number": "303"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/303.mp3",
+              "size": {
+                "number": "1000"
+              },
+              "duration": {
+                "number": "62"
+              },
+              "show_title": "true",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "other"
+            }
+          ]
+        },
+        {
+          "title": "7",
+          "id": {
+            "number": "23"
+          },
+          "parent_id": {
+            "number": "1"
+          },
+          "items": [
+            {
+              "type": "object.item.videoItem.movie",
+              "title": "1917",
+              "id": {
+                "number": "300"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "War film & \"epic\" <HD> &#169; 2019 &#x2014; ok",
+              "url": "http://192.168.1.10:49152/web/media/300.ts?x=1&y=2",
+              "size": {
+                "number": "4823449600"
+              },
+              "duration": {
+                "number": "7213"
+              },
+              "show_title": "7",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "movie"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "S01E02 - 0.5e3",
+              "id": {
+                "number": "301"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/301.ts",
+              "size": {
+                "number": "-1"
+              },
+              "duration": {
+                "number": "0"
+              },
+              "show_title": "7",
+              "season_number": "01",
+              "season_number_padded": "01",
+              "episode_number": "02",
+              "episode_number_padded": "02",
+              "ext": "ts",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "31",
+              "id": {
+                "number": "302"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/302.mpg",
+              "size": {
+                "number": "123"
+              },
+              "duration": {
+                "number": "2700"
+              },
+              "show_title": "7",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "mpg",
+              "item_type": "movie"
+            },
+            {
+              "type": "object.item.audioItem",
+              "title": "Spaced   Title",
+              "id": {
+                "number": "303"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/303.mp3",
+              "size": {
+                "number": "1000"
+              },
+              "duration": {
+                "number": "62"
+              },
+              "show_title": "7",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "other"
+            }
+          ]
+        },
+        {
+          "title": "Grey's Anatomy",
+          "id": {
+            "number": "24"
+          },
+          "parent_id": {
+            "number": "1"
+          },
+          "items": [
+            {
+              "type": "object.item.videoItem.movie",
+              "title": "1917",
+              "id": {
+                "number": "300"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "War film & \"epic\" <HD> &#169; 2019 &#x2014; ok",
+              "url": "http://192.168.1.10:49152/web/media/300.ts?x=1&y=2",
+              "size": {
+                "number": "4823449600"
+              },
+              "duration": {
+                "number": "7213"
+              },
+              "show_title": "Grey's Anatomy",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "movie"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "S01E02 - 0.5e3",
+              "id": {
+                "number": "301"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/301.ts",
+              "size": {
+                "number": "-1"
+              },
+              "duration": {
+                "number": "0"
+              },
+              "show_title": "Grey's Anatomy",
+              "season_number": "01",
+              "season_number_padded": "01",
+              "episode_number": "02",
+              "episode_number_padded": "02",
+              "ext": "ts",
+              "item_type": "episode"
+            },
+            {
+              "type": "object.item.videoItem",
+              "title": "31",
+              "id": {
+                "number": "302"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/302.mpg",
+              "size": {
+                "number": "123"
+              },
+              "duration": {
+                "number": "2700"
+              },
+              "show_title": "Grey's Anatomy",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "mpg",
+              "item_type": "movie"
+            },
+            {
+              "type": "object.item.audioItem",
+              "title": "Spaced   Title",
+              "id": {
+                "number": "303"
+              },
+              "parent_id": {
+                "number": "20"
+              },
+              "description": "",
+              "url": "http://192.168.1.10:49152/web/media/303.mp3",
+              "size": {
+                "number": "1000"
+              },
+              "duration": {
+                "number": "62"
+              },
+              "show_title": "Grey's Anatomy",
+              "season_number": null,
+              "season_number_padded": null,
+              "episode_number": null,
+              "episode_number_padded": null,
+              "ext": "ts",
+              "item_type": "other"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
