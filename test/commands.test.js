@@ -24,6 +24,9 @@ const collectBody = (req) =>
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
   })
 
+const FIXTURE_ITEM_HOST = 'http://192.168.1.10:49152'
+const MAX_OCTET_RECORDING = 4398046510080
+
 let server = null
 let serverPort = null
 let rootFixture = 'browse-root.xml'
@@ -47,7 +50,12 @@ const startServer = () =>
           'browse-empty.xml'
         )
         res.writeHead(200, { 'Content-Type': 'text/xml' })
-        res.end(readFixture(fixture))
+        res.end(readFixture(fixture).replaceAll(FIXTURE_ITEM_HOST, `http://127.0.0.1:${serverPort}`))
+        return
+      }
+      if (req.method === 'HEAD' && req.url.startsWith('/item/')) {
+        res.writeHead(200, { 'Content-Length': String(MAX_OCTET_RECORDING) })
+        res.end()
         return
       }
       res.writeHead(404)
