@@ -82,7 +82,9 @@ const LENGTH_SETTLE_DELAY = 3000
 const LENGTH_PROBE_CONCURRENCY = 3
 const MISSING_ITEM_CACHE_TTL = 5 * 60 * 1000
 const FINISHED_LENGTH_CACHE_TTL = 60 * 60 * 1000
+const NO_ANSWER_CACHE_TTL = 60 * 1000
 const MISSING_STATUSES = new Set([404, 410])
+const UNAVAILABLE_MESSAGE = 'Listed on the box but its file could not be opened; it may have been deleted on the box.'
 const MAX_BOX_OUTAGES = 3
 const FLOWING_STREAM_WINDOW = 60000
 const BOX_UNREACHABLE = 'box-unreachable'
@@ -108,6 +110,7 @@ const SAVE_STATUS = {
   STILL_RECORDING: 'still_recording',
   LOCKED: 'locked',
   FAILED: 'failed',
+  UNAVAILABLE: 'unavailable',
   CANCELLED: 'cancelled'
 }
 
@@ -455,7 +458,7 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
   const progressBar = createShowProgress({ totalShows, onProgress })
 
   const batchSize = 5
-  const results = []
+  const listedShows = []
   const itemsErrors = []
 
   for (let i = 0; i < filteredShows.length; i += batchSize) {
@@ -466,20 +469,6 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
       if (titleFilter.length > 0)
         items = items.filter(item => titleFilter.some(t => item.title.toLowerCase().includes(t)))
 
-      items = await Promise.all(items.map(item => resolveUnknownSize({ item, limit: limitLengthProbe })))
-
-      if (isRecordingFilter && items.length > 0) {
-        const recordingItems = []
-        for (const item of items) {
-          const isRecording = await requestManager.enqueue(
-            () => isCurrentlyRecording(item),
-            REQUEST_QUEUE_PRIORITY.RECORDING_CHECK
-          )
-          if (isRecording) recordingItems.push(item)
-        }
-        items = recordingItems
-      }
-
       processedShows++
       progressBar.update(processedShows)
 
@@ -488,8 +477,13 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
     })
 
     const batchResults = await Promise.all(batchPromises)
-    results.push(...batchResults.filter(Boolean))
+    listedShows.push(...batchResults.filter(Boolean))
   }
+
+  const sizedShows = await resolveUnknownSizes({ shows: listedShows, limit: limitLengthProbe })
+  const results = isRecordingFilter
+    ? await keepRecordingItems({ shows: sizedShows, requestManager })
+    : sizedShows
 
   progressBar.stop()
 
@@ -500,6 +494,27 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
 
   onOutcome({ outcome: LISTING_OUTCOME.OK })
   return results
+}
+
+const resolveUnknownSizes = ({ shows, limit }) =>
+  Promise.all(shows.map(async show => ({
+    ...show,
+    items: await Promise.all(show.items.map(item => resolveUnknownSize({ item, limit })))
+  })))
+
+const keepRecordingItems = async ({ shows, requestManager }) => {
+  const recordingShows = await Promise.all(shows.map(async show => {
+    const items = []
+    for (const item of show.items) {
+      const isRecording = await requestManager.enqueue(
+        () => isCurrentlyRecording(item),
+        REQUEST_QUEUE_PRIORITY.RECORDING_CHECK
+      )
+      if (isRecording) items.push(item)
+    }
+    return items.length > 0 ? { ...show, items } : null
+  }))
+  return recordingShows.filter(Boolean)
 }
 
 const createShowProgress = ({ totalShows, onProgress }) => {
@@ -1189,6 +1204,7 @@ const getDownloadStatus = (downloadResult) => {
   if (downloadResult.cancelled) return SAVE_STATUS.CANCELLED
   if (downloadResult.stillRecording) return SAVE_STATUS.STILL_RECORDING
   if (downloadResult.locked) return SAVE_STATUS.LOCKED
+  if (downloadResult.unavailable) return SAVE_STATUS.UNAVAILABLE
   return SAVE_STATUS.FAILED
 }
 
@@ -1304,7 +1320,7 @@ const handleSaveAction = async ({ recordings, savePath, template, forPlex, overw
     }
 
     const summaryLine = formatSaveSummary(summary)
-    if (summary.remaining > 0) logWarning(summaryLine)
+    if (summary.remaining > 0 || summary.unavailable > 0) logWarning(summaryLine)
     else log(chalk.green(summaryLine))
 
     return summary
@@ -1323,12 +1339,13 @@ const summariseSaveResults = (results) => {
     alreadySaved: countStatus(SAVE_STATUS.ALREADY_SAVED),
     failed: countStatus(SAVE_STATUS.FAILED),
     stillRecording: countStatus(SAVE_STATUS.STILL_RECORDING),
-    locked: countStatus(SAVE_STATUS.LOCKED)
+    locked: countStatus(SAVE_STATUS.LOCKED),
+    unavailable: countStatus(SAVE_STATUS.UNAVAILABLE)
   }
   return { ...summary, remaining: summary.failed + summary.stillRecording + summary.locked }
 }
 
-const formatSaveSummary = ({ total, saved, alreadySaved, failed, stillRecording, locked, remaining }) => {
+const formatSaveSummary = ({ total, saved, alreadySaved, failed, stillRecording, locked, unavailable = 0, remaining }) => {
   const savedPart = alreadySaved > 0
     ? `Saved ${saved} of ${total}, ${alreadySaved} already saved.`
     : `Saved ${saved} of ${total}.`
@@ -1338,8 +1355,11 @@ const formatSaveSummary = ({ total, saved, alreadySaved, failed, stillRecording,
     locked > 0 && `${locked} in use by another save`
   ].filter(Boolean)
 
-  if (remaining === 0) return savedPart
-  return `${savedPart} ${leftParts.join(', ')}. Run the same command again to finish the remaining ${remaining}.`
+  const unavailablePart = unavailable > 0
+    ? ` ${unavailable} listed on the box but could not be opened.`
+    : ''
+  if (remaining === 0) return `${savedPart}${unavailablePart}`
+  return `${savedPart}${unavailablePart} ${leftParts.join(', ')}. Run the same command again to finish the remaining ${remaining}.`
 }
 
 const isValidConcurrency = (value) =>
@@ -1741,12 +1761,16 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show', onF
 }
 
 const knownLengths = new Map()
+let lengthProbeTimeout = LENGTH_PROBE_TIMEOUT
+let lengthSettleDelay = LENGTH_SETTLE_DELAY
 
 const resolveUnknownSize = async ({ item, limit }) => {
-  if (isPositiveSize(item.size) || !item.url) return item
+  if (isPositiveSize(item.size)) return isMarkerLength(item.size) ? { ...item, growing: true } : item
+  if (!item.url) return item
   const probe = cachedLengthProbe(item.url) ?? await probeAndCacheLength({ url: item.url, limit })
   debug('Length probe for %s (listed size %s): %O', item.title, item.size, probe)
   if (probe.finished) return { ...item, size: probe.length }
+  if (probe.growing) return { ...item, growing: true }
   if (probe.unavailable) return { ...item, unavailable: true }
   return item
 }
@@ -1759,20 +1783,25 @@ const probeAndCacheLength = async ({ url, limit }) => {
 
 const probeSettledLength = async ({ url, limit }) => {
   const first = await limit(() => probeLength(url))
+  if (isMarkerLength(first.length)) return { growing: true, length: first.length }
   if (!isFinishedLength(first.length)) return first
-  await new Promise(resolve => setTimeout(resolve, LENGTH_SETTLE_DELAY))
+  await new Promise(resolve => setTimeout(resolve, lengthSettleDelay))
   const second = await limit(() => probeLength(url))
   if (second.unavailable) return second
   if (second.length === first.length) return { finished: true, length: first.length }
-  return { growing: true, length: second.length }
+  if (second.length > first.length) return { growing: true, length: second.length }
+  return {}
 }
 
 const isFinishedLength = (length) =>
   isPositiveSize(length) && length < MAX_OCTET_RECORDING - RECORDING_MARKER_MARGIN
 
+const isMarkerLength = (length) =>
+  isPositiveSize(length) && !isFinishedLength(length)
+
 const probeLength = async (url) => {
   try {
-    const response = await httpClient.head(url, { timeout: LENGTH_PROBE_TIMEOUT })
+    const response = await httpClient.head(url, { timeout: lengthProbeTimeout })
     const length = parseInt(response.headers['content-length'] ?? '', 10)
     if (isPositiveSize(length)) return { length }
   } catch (error) {
@@ -1784,7 +1813,7 @@ const probeLength = async (url) => {
 const probeLengthWithRange = async (url) => {
   try {
     const response = await httpClient.get(url, {
-      timeout: LENGTH_PROBE_TIMEOUT,
+      timeout: lengthProbeTimeout,
       responseType: 'stream',
       headers: { Range: 'bytes=0-0' }
     })
@@ -1796,7 +1825,8 @@ const probeLengthWithRange = async (url) => {
   } catch (error) {
     error.response?.data?.destroy?.()
     if (MISSING_STATUSES.has(error.response?.status)) return { unavailable: true, status: error.response.status }
-    return { unavailable: true, code: error.response?.status ?? error.code ?? error.message }
+    debug('Length probe for %s failed: %s', url, error.response?.status ?? error.code ?? error.message)
+    return error.response ? {} : { noAnswer: true }
   }
 }
 
@@ -1813,6 +1843,7 @@ const cachedLengthProbe = (url) => {
 const cacheLengthProbe = ({ url, probe }) => {
   if (probe.finished) knownLengths.set(url, { probe, expiresAt: Date.now() + FINISHED_LENGTH_CACHE_TTL })
   if (MISSING_STATUSES.has(probe.status)) knownLengths.set(url, { probe, expiresAt: Date.now() + MISSING_ITEM_CACHE_TTL })
+  if (probe.noAnswer) knownLengths.set(url, { probe, expiresAt: Date.now() + NO_ANSWER_CACHE_TTL })
 }
 
 const createLimiter = (concurrency) => {
@@ -1837,6 +1868,10 @@ const isCurrentlyRecording = async (item) => {
   if (item.unavailable) {
     debug('Item %s is listed but the box did not serve it; not recording.', item.title)
     return false
+  }
+  if (item.growing) {
+    debug('Item %s is growing or carries the recording marker; currently recording.', item.title)
+    return true
   }
   if (!Number.isFinite(item.size) || item.size <= 0) {
     debug('Item %s has non-positive size (%s); treating as currently recording.', item.title, item.size)
@@ -1888,8 +1923,12 @@ const isCurrentlyRecording = async (item) => {
 
 const downloadFile = async ({ item, filePath, progressBar, overwrite = false, idleTimeout = BODY_IDLE_TIMEOUT, connectTimeout = CONNECT_TIMEOUT, headerTimeout, onData = () => {}, onStreamClosed = () => {}, signal }) => {
   if (item.unavailable) {
-    logWarning(`Skipping ${item.title}, the box lists it but did not serve it.`)
-    return { recorded: false, unavailable: true, error: 'The box lists this recording but did not send it. It may have been deleted on the box.' }
+    logWarning(`${item.title} is listed on the box but its file could not be opened; it may have been deleted on the box.`)
+    return { recorded: false, unavailable: true, error: UNAVAILABLE_MESSAGE }
+  }
+  if (item.growing) {
+    logWarning(`Skipping ${item.title}, the box is still recording it.`)
+    return { recorded: false, stillRecording: true, warning: 'Skipping item, the box is still recording it' }
   }
   if (!Number.isFinite(item.size) || item.size <= 0) {
     logWarning(`Skipping ${item.title}, size is non-positive (${item.size}), likely still recording.`)
@@ -2574,7 +2613,9 @@ const formatItem = (item) => ({
   season_number_padded: item.season_number_padded,
   episode_number: item.episode_number,
   episode_number_padded: item.episode_number_padded,
-  ext: item.ext
+  ext: item.ext,
+  growing: item.growing === true,
+  unavailable: item.unavailable === true
 })
 
 const createValidFilename = (filename = '') => {
@@ -2931,4 +2972,10 @@ export {
   httpClient,
 }
 
-export const testInternals = { searchSsdp, parseSsdpResponse, forgetKnownLengths: () => knownLengths.clear() }
+export const testInternals = {
+  searchSsdp,
+  parseSsdpResponse,
+  forgetKnownLengths: () => knownLengths.clear(),
+  setLengthProbeTimeout: (timeout = LENGTH_PROBE_TIMEOUT) => { lengthProbeTimeout = timeout },
+  setLengthSettleDelay: (delay = LENGTH_SETTLE_DELAY) => { lengthSettleDelay = delay }
+}
