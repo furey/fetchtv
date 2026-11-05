@@ -66,7 +66,7 @@ If you already know your box's IP, skip discovery and run on bridge networking:
 docker run --rm furey/fetchtv recordings --ip 192.168.1.20
 ```
 
-A VPN that routes all traffic through its tunnel can also block the SSDP multicast search. Allow local network access in the VPN app, or give the box's IP address with `--ip`.
+A VPN can also block the SSDP multicast search, even with local network access allowed in the VPN app. Give the box's IP address with `--ip` instead.
 
 ## Common flags
 
