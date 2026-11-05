@@ -232,7 +232,7 @@ fetchtv <COMMAND> [OPTIONS]
 | `--help`         | `-h`  | `boolean` | Show help message                                                                                                                        |
 
 > [!NOTE]<br>
-> Without `--ip`, fetchtv finds the box with an SSDP multicast search on the local network. A VPN that routes all traffic through its tunnel can block that search. Allow local network access in the VPN app, or give the box's IP address with `--ip=<box IP>`.
+> Without `--ip`, fetchtv finds the box with an SSDP multicast search on the local network. A VPN can block that search, even with local network access allowed in the VPN app. Give the box's IP address with `--ip=<box IP>` instead.
 
 ## Save paths
 
