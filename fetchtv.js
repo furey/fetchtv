@@ -1826,7 +1826,7 @@ const probeLengthWithRange = async (url) => {
     error.response?.data?.destroy?.()
     if (MISSING_STATUSES.has(error.response?.status)) return { unavailable: true, status: error.response.status }
     debug('Length probe for %s failed: %s', url, error.response?.status ?? error.code ?? error.message)
-    return { noAnswer: true }
+    return error.response ? {} : { noAnswer: true }
   }
 }
 
