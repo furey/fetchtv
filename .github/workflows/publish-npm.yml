@@ -4,20 +4,23 @@ on:
   release:
     types: [created]
 
-permissions:
-  contents: read
-  id-token: write
+permissions: {}
 
 jobs:
   build:
     if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org/
-      - run: npm install -g npm@11.21.1
+          package-manager-cache: false
       - run: npm ci
       - run: npm publish --access public
