@@ -452,15 +452,20 @@ test('summary: counts each status and formats the final line', () => {
     ...Array(4).fill({ status: 'already_saved' }),
     ...Array(2).fill({ status: 'failed' }),
     { status: 'still_recording' },
+    { status: 'unavailable' },
   ]
   const summary = summariseSaveResults(results)
 
   assert.deepEqual(summary, {
-    total: 10, saved: 3, alreadySaved: 4, failed: 2, stillRecording: 1, locked: 0, remaining: 3,
+    total: 11, saved: 3, alreadySaved: 4, failed: 2, stillRecording: 1, locked: 0, unavailable: 1, remaining: 3,
   })
   assert.equal(
     formatSaveSummary(summary),
-    'Saved 3 of 10, 4 already saved. 2 failed, 1 still recording. Run the same command again to finish the remaining 3.',
+    'Saved 3 of 11, 4 already saved. 1 listed on the box but could not be opened. 2 failed, 1 still recording. Run the same command again to finish the remaining 3.',
+  )
+  assert.equal(
+    formatSaveSummary(summariseSaveResults([{ status: 'saved' }, { status: 'unavailable' }])),
+    'Saved 1 of 2. 1 listed on the box but could not be opened.',
   )
   assert.equal(
     formatSaveSummary(summariseSaveResults([{ status: 'saved' }, { status: 'saved' }])),
