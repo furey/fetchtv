@@ -231,6 +231,9 @@ fetchtv <COMMAND> [OPTIONS]
 | `--debug`        | `-d`  | `boolean` | Enable verbose logging for debugging                                                                                                     |
 | `--help`         | `-h`  | `boolean` | Show help message                                                                                                                        |
 
+> [!NOTE]<br>
+> Without `--ip`, fetchtv finds the box with an SSDP multicast search on the local network. A VPN that routes all traffic through its tunnel can block that search. Allow local network access in the VPN app, or give the box's IP address with `--ip=<box IP>`.
+
 ## Save paths
 
 - [Template variables](#template-variables)
@@ -537,7 +540,14 @@ await downloadFile({
 
 The table lists the supported API. Other exports, including `testInternals`, exist for the test suite only and can change in any release.
 
-`isCurrentlyRecording` / `downloadFile` recognise two "still recording" sentinels in the UPnP directory listing: the `4398046510080`-byte marker, and any non-positive size (typically `-1`). Both cause `downloadFile` to refuse the download, because partial bytes from an in-progress recording would otherwise be written out as a truncated file. Fetch boxes also list some finished recordings with size `-1`. For each item with a non-positive size, `getFetchRecordings` asks the box for the file length (`HEAD`, or a one-byte `Range` request when the box refuses `HEAD`) twice, `3` seconds apart; a `HEAD` that fails or times out also falls back to the `Range` request. If both answers give the same length below the marker, the item gets that length as its `size` and saves as normal. If the length grows or matches the marker, the item keeps its size and counts as still recording. If the box answers `404` or does not answer, the item gets `unavailable: true`: `isCurrentlyRecording` returns `false` for it, and `downloadFile` refuses it with `unavailable: true` and an `error`. Finished lengths are kept for `1` hour, and `404` answers for `5` minutes; at most `3` items are probed at once.
+`isCurrentlyRecording` / `downloadFile` recognise two "still recording" sentinels in the UPnP directory listing: the `4398046510080`-byte marker, and any non-positive size (typically `-1`). Both cause `downloadFile` to refuse the download, because partial bytes from an in-progress recording would otherwise be written out as a truncated file. Fetch boxes also list some finished recordings with size `-1`. For each item with a non-positive size, `getFetchRecordings` asks the box for the file length (`HEAD`, or a one-byte `Range` request when the box refuses `HEAD`) twice, `3` seconds apart; a `HEAD` that fails or times out also falls back to the `Range` request. The answers set the item fields like this:
+
+- **Same length twice, more than `1 MB` below the marker**: the item gets that length as its `size` and saves as normal.
+- **Length grows, or is within `1 MB` of the marker**: the item keeps its size and gets `growing: true`. An item listed with a size within `1 MB` of the marker also gets `growing: true`, with no extra request. `isCurrentlyRecording` returns `true` for a `growing` item, and `downloadFile` refuses it with `stillRecording: true`.
+- **Box answers `404` or `410`**: the item gets `unavailable: true`. `isCurrentlyRecording` returns `false` for it, and `downloadFile` refuses it with `unavailable: true` and an `error`.
+- **Length shrinks, timeout, refused connection, or any other error**: the item keeps its non-positive size and gets neither flag, so it still counts as possibly recording.
+
+Finished lengths are kept for `1` hour, and `404` or `410` answers for `5` minutes; other results are not kept, so the next listing asks again. At most `3` items are probed at once.
 
 Deletion is intentionally not exposed: Fetch TV firmware advertises the standard UPnP `DestroyObject` action in its ContentDirectory SCPD but its request handler rejects it (`Unknown Service Action`), and HTTP `DELETE` on the item URL returns `501`. The Fetch box's real control plane for deletion lives in Fetch's cloud APIs (auth + WebSocket to `messages.fetchtv.com.au`) and is out of scope for this LAN-only library.
 

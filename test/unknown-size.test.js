@@ -35,10 +35,10 @@ const escapeXml = (text) => text
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;')
 
-const didlItem = ({ id, title, route }) =>
+const didlItem = ({ id, title, route, size = -1 }) =>
   `<item id="${id}" parentID="10" restricted="1"><dc:title>${title}</dc:title>` +
   '<upnp:class>object.item.videoItem</upnp:class>' +
-  `<res protocolInfo="http-get:*:video/mpeg-tts:*" size="-1" duration="0:00:00">${baseUrl}${route}</res></item>`
+  `<res protocolInfo="http-get:*:video/mpeg-tts:*" size="${size}" duration="0:00:00">${baseUrl}${route}</res></item>`
 
 const ITEMS = [
   { id: 201, title: 'S1 E1 - Finished', route: '/item/finished' },
@@ -46,7 +46,13 @@ const ITEMS = [
   { id: 203, title: 'S1 E3 - Deleted', route: '/item/deleted' },
   { id: 204, title: 'S1 E4 - No Head', route: '/item/no-head' },
   { id: 205, title: 'S1 E5 - Live Marker', route: '/item/live-marker' },
+  { id: 206, title: 'S1 E6 - Silent', route: '/item/silent' },
+  { id: 207, title: 'S1 E7 - Reset', route: '/item/reset' },
+  { id: 208, title: 'S1 E8 - Listed Marker', route: '/item/listed-marker', size: MAX_OCTET_RECORDING },
+  { id: 209, title: 'S1 E9 - Gone', route: '/item/gone' },
 ]
+
+const SHORT_PROBE_TIMEOUT = 200
 
 const showItemsResponse = () => {
   const didl = '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">' +
@@ -113,11 +119,24 @@ const serveLiveMarker = (req, res) => {
   res.end()
 }
 
+const serveSilent = () => {}
+
+const serveGone = (req, res) => {
+  res.writeHead(410)
+  res.end()
+}
+
+const serveReset = (req) => req.socket.destroy()
+
 const itemRoutes = {
   '/item/finished': serveFinished,
   '/item/growing': serveGrowing,
   '/item/no-head': serveNoHead,
   '/item/live-marker': serveLiveMarker,
+  '/item/listed-marker': serveLiveMarker,
+  '/item/silent': serveSilent,
+  '/item/reset': serveReset,
+  '/item/gone': serveGone,
 }
 
 const location = () => ({
@@ -167,9 +186,12 @@ before(async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   baseUrl = `http://127.0.0.1:${server.address().port}`
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'fetchtv-unknown-size-'))
+  testInternals.setLengthProbeTimeout(SHORT_PROBE_TIMEOUT)
 })
 
 after(async () => {
+  testInternals.setLengthProbeTimeout()
+  server.closeAllConnections()
   await new Promise(resolve => server.close(resolve))
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
@@ -191,21 +213,58 @@ test('unknown size: a growing Content-Length stays recording', async () => {
   const items = await listItems()
   assert.equal(items['202'].size, -1)
   assert.equal(items['202'].unavailable, undefined)
+  assert.equal(items['202'].growing, true)
   assert.equal(await isCurrentlyRecording(items['202']), true)
 })
 
 test('unknown size: the live-recording marker stays recording after one probe', async () => {
   const items = await listItems()
   assert.equal(items['205'].size, -1)
+  assert.equal(items['205'].growing, true)
+  assert.equal(items['205'].unavailable, undefined)
   assert.equal(await isCurrentlyRecording(items['205']), true)
   assert.equal(probesOf('/item/live-marker').length, 1)
+})
+
+test('unknown size: a listed marker size is growing without a probe', async () => {
+  const items = await listItems()
+  assert.equal(items['208'].size, MAX_OCTET_RECORDING)
+  assert.equal(items['208'].growing, true)
+  assert.equal(await isCurrentlyRecording(items['208']), true)
+  assert.equal(probesOf('/item/listed-marker').length, 0)
+  const result = await silenced(() => downloadFile({ item: items['208'], filePath: path.join(tmpDir, 'listed-marker.ts') }))
+  assert.equal(result.stillRecording, true)
+  assert.equal(result.unavailable, undefined)
+})
+
+test('unknown size: a timeout or reset gets neither flag, stays recording, and is not cached', async () => {
+  const first = await listItems()
+  for (const id of ['206', '207']) {
+    assert.equal(first[id].size, -1, id)
+    assert.equal(first[id].unavailable, undefined, id)
+    assert.equal(first[id].growing, undefined, id)
+    assert.equal(await isCurrentlyRecording(first[id]), true, id)
+  }
+  const result = await silenced(() => downloadFile({ item: first['206'], filePath: path.join(tmpDir, 'silent.ts') }))
+  assert.equal(result.stillRecording, true)
+  assert.equal(result.unavailable, undefined)
+  requestLog = []
+  await listItems()
+  assert.ok(probesOf('/item/silent').length > 0)
+  assert.ok(probesOf('/item/reset').length > 0)
 })
 
 test('unknown size: a 404 marks the item unavailable, not recording', async () => {
   const items = await listItems()
   assert.equal(items['203'].size, -1)
   assert.equal(items['203'].unavailable, true)
+  assert.equal(items['203'].growing, undefined)
+  assert.equal(items['209'].unavailable, true)
+  assert.equal(await isCurrentlyRecording(items['209']), false)
   assert.equal(await isCurrentlyRecording(items['203']), false)
+  const result = await silenced(() => downloadFile({ item: items['203'], filePath: path.join(tmpDir, 'deleted.ts') }))
+  assert.equal(result.unavailable, true)
+  assert.match(result.error, /did not send it/)
 })
 
 test('unknown size: a box that refuses HEAD is probed with a one-byte range', async () => {

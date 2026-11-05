@@ -1741,12 +1741,15 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show', onF
 }
 
 const knownLengths = new Map()
+let lengthProbeTimeout = LENGTH_PROBE_TIMEOUT
 
 const resolveUnknownSize = async ({ item, limit }) => {
-  if (isPositiveSize(item.size) || !item.url) return item
+  if (isPositiveSize(item.size)) return isMarkerLength(item.size) ? { ...item, growing: true } : item
+  if (!item.url) return item
   const probe = cachedLengthProbe(item.url) ?? await probeAndCacheLength({ url: item.url, limit })
   debug('Length probe for %s (listed size %s): %O', item.title, item.size, probe)
   if (probe.finished) return { ...item, size: probe.length }
+  if (probe.growing) return { ...item, growing: true }
   if (probe.unavailable) return { ...item, unavailable: true }
   return item
 }
@@ -1759,20 +1762,25 @@ const probeAndCacheLength = async ({ url, limit }) => {
 
 const probeSettledLength = async ({ url, limit }) => {
   const first = await limit(() => probeLength(url))
+  if (isMarkerLength(first.length)) return { growing: true, length: first.length }
   if (!isFinishedLength(first.length)) return first
   await new Promise(resolve => setTimeout(resolve, LENGTH_SETTLE_DELAY))
   const second = await limit(() => probeLength(url))
   if (second.unavailable) return second
   if (second.length === first.length) return { finished: true, length: first.length }
-  return { growing: true, length: second.length }
+  if (second.length > first.length) return { growing: true, length: second.length }
+  return {}
 }
 
 const isFinishedLength = (length) =>
   isPositiveSize(length) && length < MAX_OCTET_RECORDING - RECORDING_MARKER_MARGIN
 
+const isMarkerLength = (length) =>
+  isPositiveSize(length) && !isFinishedLength(length)
+
 const probeLength = async (url) => {
   try {
-    const response = await httpClient.head(url, { timeout: LENGTH_PROBE_TIMEOUT })
+    const response = await httpClient.head(url, { timeout: lengthProbeTimeout })
     const length = parseInt(response.headers['content-length'] ?? '', 10)
     if (isPositiveSize(length)) return { length }
   } catch (error) {
@@ -1784,7 +1792,7 @@ const probeLength = async (url) => {
 const probeLengthWithRange = async (url) => {
   try {
     const response = await httpClient.get(url, {
-      timeout: LENGTH_PROBE_TIMEOUT,
+      timeout: lengthProbeTimeout,
       responseType: 'stream',
       headers: { Range: 'bytes=0-0' }
     })
@@ -1796,7 +1804,8 @@ const probeLengthWithRange = async (url) => {
   } catch (error) {
     error.response?.data?.destroy?.()
     if (MISSING_STATUSES.has(error.response?.status)) return { unavailable: true, status: error.response.status }
-    return { unavailable: true, code: error.response?.status ?? error.code ?? error.message }
+    debug('Length probe for %s failed: %s', url, error.response?.status ?? error.code ?? error.message)
+    return {}
   }
 }
 
@@ -1837,6 +1846,10 @@ const isCurrentlyRecording = async (item) => {
   if (item.unavailable) {
     debug('Item %s is listed but the box did not serve it; not recording.', item.title)
     return false
+  }
+  if (item.growing) {
+    debug('Item %s is growing or carries the recording marker; currently recording.', item.title)
+    return true
   }
   if (!Number.isFinite(item.size) || item.size <= 0) {
     debug('Item %s has non-positive size (%s); treating as currently recording.', item.title, item.size)
@@ -1890,6 +1903,10 @@ const downloadFile = async ({ item, filePath, progressBar, overwrite = false, id
   if (item.unavailable) {
     logWarning(`Skipping ${item.title}, the box lists it but did not serve it.`)
     return { recorded: false, unavailable: true, error: 'The box lists this recording but did not send it. It may have been deleted on the box.' }
+  }
+  if (item.growing) {
+    logWarning(`Skipping ${item.title}, the box is still recording it.`)
+    return { recorded: false, stillRecording: true, warning: 'Skipping item, the box is still recording it' }
   }
   if (!Number.isFinite(item.size) || item.size <= 0) {
     logWarning(`Skipping ${item.title}, size is non-positive (${item.size}), likely still recording.`)
@@ -2931,4 +2948,9 @@ export {
   httpClient,
 }
 
-export const testInternals = { searchSsdp, parseSsdpResponse, forgetKnownLengths: () => knownLengths.clear() }
+export const testInternals = {
+  searchSsdp,
+  parseSsdpResponse,
+  forgetKnownLengths: () => knownLengths.clear(),
+  setLengthProbeTimeout: (timeout = LENGTH_PROBE_TIMEOUT) => { lengthProbeTimeout = timeout }
+}
