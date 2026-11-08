@@ -1,10 +1,19 @@
-# fetchtv
+<p align="center">
+  <img src="https://github.com/furey/fetchtv/releases/download/docs-media/fetchtv-icon-animated.gif" alt="fetchtv" width="128"/>
+</p>
 
-[![NPM Version](https://img.shields.io/npm/v/fetchtv)](https://www.npmjs.com/package/fetchtv)
-[![Docker Pulls](https://img.shields.io/docker/pulls/furey/fetchtv)](https://hub.docker.com/r/furey/fetchtv)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+<h1 align="center">fetchtv</h1>
 
-A Node.js CLI tool to download Fetch TV PVR recordings over the local network.
+<p align="center">
+  <strong>Save the recordings on your Fetch TV box over your home network.</strong><br/>
+  A command-line tool for Node.js and Docker.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/fetchtv"><img alt="npm" src="https://img.shields.io/npm/v/fetchtv.svg?style=flat-square&color=5ce1c6&label=npm"/></a>
+  <a href="https://hub.docker.com/r/furey/fetchtv"><img alt="Docker pulls" src="https://img.shields.io/docker/pulls/furey/fetchtv.svg?style=flat-square&color=3ba4ff&label=docker%20pulls"/></a>
+  <a href="https://www.gnu.org/licenses/gpl-3.0"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-f28c28.svg?style=flat-square"/></a>
+</p>
 
 > [!TIP]<br>
 > Prefer an app you download and double-click, with no terminal or Node.js? [Fetch My Recordings](https://github.com/furey/fetch-my-recordings) is a free desktop app for Mac, Windows, and Linux, built on `fetchtv`. [Download it for your computer](https://furey.github.io/freetvarr/guide/leaving-fetch#save-via-desktop-app).
