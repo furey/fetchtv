@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/furey/fetchtv/releases/download/docs-media/fetchtv-icon-animated.gif" alt="fetchtv" width="128"/>
+  <img src="https://github.com/furey/fetchtv/releases/download/docs-media/fetchtv-icon-animated.gif" alt="fetchtv" width="64"/>
 </p>
 
 <h1 align="center">fetchtv</h1>
