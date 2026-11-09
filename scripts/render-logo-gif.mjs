@@ -14,7 +14,8 @@ const { values } = parseArgs({
     still: { type: 'string' },
     hold: { type: 'string', default: '2' },
     empty: { type: 'string', default: '0.35' },
-    fps: { type: 'string', default: '33.333333' }
+    fps: { type: 'string', default: '33.333333' },
+    size: { type: 'string', default: '256' }
   }
 })
 
@@ -26,7 +27,7 @@ const LEAVE_START_MS = 4200
 const LEAVE_END_MS = 4680
 const GRID = 32
 const ROUND_CHIP_CORNERS = false
-const OUTPUT_SIZE = 256
+const OUTPUT_SIZE = Number(values.size)
 const CELLS_PER_MARK_UNIT = (800 / 64) / (1024 / GRID)
 const TILE_RADIUS_CELLS = 200 / (1024 / GRID)
 const COLOURS = {
