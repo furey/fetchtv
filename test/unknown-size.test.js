@@ -211,6 +211,7 @@ beforeEach(() => {
   requestLog = []
   isManyShows = false
   testInternals.setLengthSettleDelay()
+  testInternals.setLengthSettleWait()
   testInternals.forgetKnownLengths()
 })
 
@@ -364,24 +365,27 @@ test('unknown size: downloadFile still refuses an unprobed non-positive size as 
 })
 
 test('unknown size: unknown-size items across show batches share one probe cycle', async () => {
-  const settleDelay = 600
-  const timedListing = async () => {
-    testInternals.forgetKnownLengths()
-    const startedAt = Date.now()
-    const items = await listItems()
-    return { items, elapsed: Date.now() - startedAt }
+  const heldSettles = []
+  let mostHeldAtOnce = 0
+  let releaseIfStuck = null
+  const releaseAll = () => {
+    clearTimeout(releaseIfStuck)
+    heldSettles.splice(0).forEach(release => release())
   }
   isManyShows = true
+  testInternals.setLengthSettleWait(() => new Promise(resolve => {
+    heldSettles.push(resolve)
+    mostHeldAtOnce = Math.max(mostHeldAtOnce, heldSettles.length)
+    clearTimeout(releaseIfStuck)
+    if (heldSettles.length === MANY_SHOW_IDS.length) return releaseAll()
+    releaseIfStuck = setTimeout(releaseAll, 2000)
+  }))
   try {
-    testInternals.setLengthSettleDelay(0)
-    const baseline = await timedListing()
-    testInternals.setLengthSettleDelay(settleDelay)
-    const { items, elapsed } = await timedListing()
+    const items = await listItems()
     assert.equal(Object.keys(items).length, MANY_SHOW_IDS.length)
     for (const item of Object.values(items)) assert.equal(item.size, BODY.length + FETCH_BOX_OVERSTATEMENT, item.id)
-    const probeWait = elapsed - baseline.elapsed
-    assert.ok(probeWait < settleDelay * 2, `probes added ${probeWait} ms, more than one probe cycle`)
+    assert.equal(mostHeldAtOnce, MANY_SHOW_IDS.length, `only ${mostHeldAtOnce} of ${MANY_SHOW_IDS.length} settle waits ran at once`)
   } finally {
-    testInternals.setLengthSettleDelay()
+    testInternals.setLengthSettleWait()
   }
 })

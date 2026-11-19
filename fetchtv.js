@@ -1763,6 +1763,8 @@ const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show', onF
 const knownLengths = new Map()
 let lengthProbeTimeout = LENGTH_PROBE_TIMEOUT
 let lengthSettleDelay = LENGTH_SETTLE_DELAY
+const waitForTheDelay = (delay) => new Promise(resolve => setTimeout(resolve, delay))
+let waitForLengthToSettle = waitForTheDelay
 
 const resolveUnknownSize = async ({ item, limit }) => {
   if (isPositiveSize(item.size)) return isMarkerLength(item.size) ? { ...item, growing: true } : item
@@ -1785,7 +1787,7 @@ const probeSettledLength = async ({ url, limit }) => {
   const first = await limit(() => probeLength(url))
   if (isMarkerLength(first.length)) return { growing: true, length: first.length }
   if (!isFinishedLength(first.length)) return first
-  await new Promise(resolve => setTimeout(resolve, lengthSettleDelay))
+  await waitForLengthToSettle(lengthSettleDelay)
   const second = await limit(() => probeLength(url))
   if (second.unavailable) return second
   if (second.length === first.length) return { finished: true, length: first.length }
@@ -2977,5 +2979,6 @@ export const testInternals = {
   parseSsdpResponse,
   forgetKnownLengths: () => knownLengths.clear(),
   setLengthProbeTimeout: (timeout = LENGTH_PROBE_TIMEOUT) => { lengthProbeTimeout = timeout },
-  setLengthSettleDelay: (delay = LENGTH_SETTLE_DELAY) => { lengthSettleDelay = delay }
+  setLengthSettleDelay: (delay = LENGTH_SETTLE_DELAY) => { lengthSettleDelay = delay },
+  setLengthSettleWait: (wait = waitForTheDelay) => { waitForLengthToSettle = wait }
 }
