@@ -1027,6 +1027,7 @@ const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite,
       const verdict = await boxWatch.waitForBox(item.url)
       if (verdict !== BOX_STATE.BACK) return heldItemResult({ verdict, item, result, attempts: retries + 1 })
     } else if (result.retryable && retries < retryDelays.length) {
+      const outagesBeforeRetry = boxWatch?.outagesSoFar()
       const delay = retryDelays[retries]
       retries++
       isSpentRetry = true
@@ -1036,6 +1037,10 @@ const downloadFileWithRetries = async ({ item, filePath, progressBar, overwrite,
       if (signal?.aborted) return { ...result, retryable: false, cancelled: true, attempts: retries + 1 }
       const verdict = await boxWatch?.untilAnswering()
       if (signal?.aborted || (verdict && verdict !== BOX_STATE.BACK)) return heldItemResult({ verdict, item, result, attempts: retries + 1 })
+      if (boxWatch && boxWatch.outagesSoFar() > outagesBeforeRetry) {
+        retries--
+        isSpentRetry = false
+      }
     } else {
       break
     }
@@ -1085,6 +1090,7 @@ const createBoxWatch = ({ boxWaitMs, probeDelays, probeTimeout, connectTimeout, 
   const lastDataAtById = new Map()
   const probeGaps = probeGapsWithin({ windowMs: boxWaitMs, delays: probeDelays })
   let outage = null
+  let outageCount = 0
   let hasGivenUp = false
 
   const announce = (state) => {
@@ -1110,7 +1116,10 @@ const createBoxWatch = ({ boxWaitMs, probeDelays, probeTimeout, connectTimeout, 
 
   const waitForBox = (url) => {
     if (hasGivenUp) return Promise.resolve(BOX_STATE.GAVE_UP)
-    if (!outage) outage = runOutage(url).finally(() => { outage = null })
+    if (!outage) {
+      outageCount++
+      outage = runOutage(url).finally(() => { outage = null })
+    }
     return outage
   }
 
@@ -1122,6 +1131,7 @@ const createBoxWatch = ({ boxWaitMs, probeDelays, probeTimeout, connectTimeout, 
   return {
     waitForBox,
     untilAnswering,
+    outagesSoFar: () => outageCount,
     noteData: (id) => lastDataAtById.set(id, Date.now()),
     noteStreamClosed: (id) => lastDataAtById.delete(id),
     isAnotherStreamFlowing: (id) => [...lastDataAtById].some(([otherId, at]) => otherId !== id && Date.now() - at < flowingWindow)

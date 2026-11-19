@@ -387,6 +387,41 @@ test('box wait: a flapping box opens the wait at most three times per item', asy
   assert.equal(results[0].attempts, 2)
 })
 
+test('box wait: a box outage that starts during a retry delay gives the spent try back', async (t) => {
+  const resetting = await createBox()
+  const restarting = await createBox()
+  let refuseRestarting = null
+  const restartingRefused = new Promise(resolve => { refuseRestarting = resolve })
+  let restartingConnections = 0
+  t.mock.method(net, 'createConnection', (options, ...rest) => {
+    const isFirstToRestarting = Number(options.port) === restarting.port && restartingConnections++ === 0
+    if (!isFirstToRestarting) return createRealConnection.call(net, options, ...rest)
+    const socket = unansweredConnection()
+    restartingRefused.then(() => socket.destroy(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED', syscall: 'connect' })))
+    return socket
+  })
+  const retried = makeItem({ id: '25', url: resetting.url('/reset') })
+  const waited = makeItem({ id: '26', url: restarting.url('/full') })
+  const retries = []
+  const { results, states } = await save({
+    items: [retried, waited],
+    retryDelays: [400, 400],
+    connectTimeout: 5000,
+    onRetry: (retry) => {
+      retries.push(retry)
+      refuseRestarting()
+    },
+  })
+
+  assert.deepEqual(states, ['lost', 'back'])
+  assert.deepEqual(retries, [{ id: '25', attempt: 2, of: 3 }])
+  assert.equal(resultFor(results, retried).status, 'saved')
+  assert.equal(resultFor(results, retried).attempts, undefined)
+  assert.equal(resultFor(results, waited).status, 'saved')
+  assert.equal(resultFor(results, waited).attempts, undefined)
+  for (const item of [retried, waited]) await assertSaved(item)
+})
+
 test('box wait: a slow box that keeps sending never opens the wait', async () => {
   const box = await createBox()
   const items = [makeItem({ id: '12', url: box.url('/slow') }), makeItem({ id: '13', url: box.url('/slow') })]
