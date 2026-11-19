@@ -78,6 +78,17 @@ const sendSlowly = ({ res, start }) => {
 const routes = {
   '/full': sendFrom,
   '/slow': sendSlowly,
+  '/trickle': ({ res, start }) => {
+    if (start !== null) return sendFrom({ res, start })
+    res.writeHead(200, { 'Content-Length': String(BODY.length) })
+    res.write(BODY.subarray(0, HALF))
+    let offset = HALF
+    const timer = setInterval(() => {
+      if (res.destroyed || offset >= BODY.length - 1) return clearInterval(timer)
+      res.write(BODY.subarray(offset, offset + 1))
+      offset++
+    }, CHUNK_GAP)
+  },
   '/server-error': ({ res }) => {
     res.writeHead(500)
     res.end()
@@ -174,6 +185,19 @@ const makeItem = ({ id, url }) => ({
 const filePathFor = (item) => path.join(tmpDir, 'Bluey', `${item.title}.ts`)
 
 const exists = (filePath) => fs.access(filePath).then(() => true, () => false)
+
+const sizeOf = (filePath) => fs.stat(filePath).then(stats => stats.size, () => null)
+
+const savedBytes = async (item) =>
+  (await sizeOf(`${filePathFor(item)}.part`)) ?? (await sizeOf(filePathFor(item))) ?? 0
+
+const until = async (condition, { timeout = 10000, interval = 5 } = {}) => {
+  const deadline = Date.now() + timeout
+  while (!(await condition())) {
+    if (Date.now() > deadline) throw new Error(`Condition not met within ${timeout} ms`)
+    await new Promise(resolve => setTimeout(resolve, interval))
+  }
+}
 
 const failedConnection = ({ code, after = 0 }) => {
   const socket = new net.Socket()
@@ -323,19 +347,26 @@ test('box wait: a 5xx reply is an item failure with no wait and no retry', async
 test('box wait: a box that restarts on the same port resumes every item and keeps the 416 and end-of-file rules', async () => {
   const box = await createBox()
   routes.shortServed = false
-  const slow = makeItem({ id: '8', url: box.url('/slow') })
+  const slow = makeItem({ id: '8', url: box.url('/trickle') })
   const overstated = makeItem({ id: '9', url: box.url('/overstate-then-hold') })
   const short = makeItem({ id: '10', url: box.url('/short-then-416') })
-  setTimeout(async () => {
+  const restartOnceEveryItemHolds = async () => {
+    await until(async () =>
+      await savedBytes(slow) >= HALF &&
+      await savedBytes(overstated) === BODY.length &&
+      await savedBytes(short) === BODY.length - 4 * CHUNK)
     await box.stop()
     setTimeout(() => box.start(), 100)
-  }, 150)
-  const { results, states } = await save({ items: [slow, overstated, short], concurrency: 3 })
+  }
+  const [{ results, states }] = await Promise.all([
+    save({ items: [slow, overstated, short], concurrency: 3, boxWaitMs: 5000, idleTimeout: 5000 }),
+    restartOnceEveryItemHolds(),
+  ])
 
   assert.deepEqual(states, ['lost', 'back'])
   assert.equal(resultFor(results, slow).status, 'saved')
   assert.equal(resultFor(results, slow).attempts, undefined)
-  assert.ok(box.downloads().some(request => request.route === '/slow' && request.start > 0))
+  assert.ok(box.downloads().some(request => request.route === '/trickle' && request.start > 0))
   assert.equal(resultFor(results, overstated).status, 'saved')
   assert.equal(resultFor(results, overstated).attempts, undefined)
   assert.equal(box.downloads().filter(request => request.route === '/overstate-then-hold').length, 1)
@@ -354,6 +385,41 @@ test('box wait: a flapping box opens the wait at most three times per item', asy
   assert.deepEqual(retries, [{ id: '11', attempt: 2, of: 3 }])
   assert.equal(results[0].status, 'saved')
   assert.equal(results[0].attempts, 2)
+})
+
+test('box wait: a box outage that starts during a retry delay gives the spent try back', async (t) => {
+  const resetting = await createBox()
+  const restarting = await createBox()
+  let refuseRestarting = null
+  const restartingRefused = new Promise(resolve => { refuseRestarting = resolve })
+  let restartingConnections = 0
+  t.mock.method(net, 'createConnection', (options, ...rest) => {
+    const isFirstToRestarting = Number(options.port) === restarting.port && restartingConnections++ === 0
+    if (!isFirstToRestarting) return createRealConnection.call(net, options, ...rest)
+    const socket = unansweredConnection()
+    restartingRefused.then(() => socket.destroy(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED', syscall: 'connect' })))
+    return socket
+  })
+  const retried = makeItem({ id: '25', url: resetting.url('/reset') })
+  const waited = makeItem({ id: '26', url: restarting.url('/full') })
+  const retries = []
+  const { results, states } = await save({
+    items: [retried, waited],
+    retryDelays: [400, 400],
+    connectTimeout: 5000,
+    onRetry: (retry) => {
+      retries.push(retry)
+      refuseRestarting()
+    },
+  })
+
+  assert.deepEqual(states, ['lost', 'back'])
+  assert.deepEqual(retries, [{ id: '25', attempt: 2, of: 3 }])
+  assert.equal(resultFor(results, retried).status, 'saved')
+  assert.equal(resultFor(results, retried).attempts, undefined)
+  assert.equal(resultFor(results, waited).status, 'saved')
+  assert.equal(resultFor(results, waited).attempts, undefined)
+  for (const item of [retried, waited]) await assertSaved(item)
 })
 
 test('box wait: a slow box that keeps sending never opens the wait', async () => {
