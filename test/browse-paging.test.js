@@ -2,7 +2,7 @@ import { test, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 
-import { getFetchRecordings, browseRequest, LISTING_OUTCOME } from '../fetchtv.js'
+import { getFetchRecordings, browseRequest, LISTING_OUTCOME, testInternals } from '../fetchtv.js'
 
 const CONTROL_PATH = '/upnp/control/ContentDirectory'
 const SERVICE_TYPE = 'urn:schemas-upnp-org:service:ContentDirectory:1'
@@ -167,9 +167,11 @@ before(async () => {
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   baseUrl = `http://127.0.0.1:${server.address().port}`
+  testInternals.setBrowseRetryDelay(10)
 })
 
 after(async () => {
+  testInternals.setBrowseRetryDelay()
   server.closeAllConnections()
   await new Promise(resolve => server.close(resolve))
 })

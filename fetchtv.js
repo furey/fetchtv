@@ -59,6 +59,8 @@ const SSDP_M_SEARCH = [
 const BROWSE_RETRY_DELAY = 1500
 const MAX_CONCURRENT_BROWSE = 5
 const MAX_BROWSE_PAGES = 200
+
+let browseRetryDelay = BROWSE_RETRY_DELAY
 const ADAPTIVE_DELAY_FACTOR = 1.5
 const INITIAL_BROWSE_CONCURRENCY = 3
 const SAVE_FILE_NAME = 'fetchtv.json'
@@ -1749,7 +1751,7 @@ const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissi
   const target = startingIndex > 0 ? `ObjectID ${objectId} from entry ${startingIndex}` : `ObjectID ${objectId}`
 
   let lastError = null
-  let delayBase = BROWSE_RETRY_DELAY
+  let delayBase = browseRetryDelay
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     if (signal?.aborted) return { isCancelled: true }
@@ -3151,6 +3153,7 @@ export const testInternals = {
   searchSsdp,
   parseSsdpResponse,
   forgetKnownLengths: () => knownLengths.clear(),
+  setBrowseRetryDelay: (delay = BROWSE_RETRY_DELAY) => { browseRetryDelay = delay },
   setLengthProbeTimeout: (timeout = LENGTH_PROBE_TIMEOUT) => { lengthProbeTimeout = timeout },
   setLengthSettleDelay: (delay = LENGTH_SETTLE_DELAY) => { lengthSettleDelay = delay },
   setLengthSettleWait: (wait = waitForTheDelay) => { waitForLengthToSettle = wait }
