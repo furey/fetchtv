@@ -58,6 +58,7 @@ const SSDP_M_SEARCH = [
 ].join('\r\n')
 const BROWSE_RETRY_DELAY = 1500
 const MAX_CONCURRENT_BROWSE = 5
+const MAX_BROWSE_PAGES = 200
 const ADAPTIVE_DELAY_FACTOR = 1.5
 const INITIAL_BROWSE_CONCURRENCY = 3
 const SAVE_FILE_NAME = 'fetchtv.json'
@@ -1602,14 +1603,14 @@ const createRequestManager = ({
   return { enqueue }
 }
 
-const createBrowsePayload = ({ serviceType, objectId, requestedCount = 0 }) => `<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+const createBrowsePayload = ({ serviceType, objectId, startingIndex = 0, requestedCount = 0 }) => `<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
  <s:Body>
   <u:Browse xmlns:u="${serviceType}">
    <ObjectID>${objectId}</ObjectID>
    <BrowseFlag>BrowseDirectChildren</BrowseFlag>
    <Filter>*</Filter>
-   <StartingIndex>0</StartingIndex>
+   <StartingIndex>${startingIndex}</StartingIndex>
    <RequestedCount>${requestedCount}</RequestedCount>
    <SortCriteria></SortCriteria>
   </u:Browse>
@@ -1617,13 +1618,47 @@ const createBrowsePayload = ({ serviceType, objectId, requestedCount = 0 }) => `
 </s:Envelope>`
 
 const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {}, isGoneWhenMissing = false }) => {
+  const pages = []
+  const seenEntries = new Set()
+  let received = 0
+
+  for (let pageNumber = 1; pageNumber <= MAX_BROWSE_PAGES; pageNumber++) {
+    const page = await browsePage({ apiService, objectId, startingIndex: received, isGoneWhenMissing })
+    if (page.isGone) return {}
+    if (page.error) {
+      onFailure(page.error)
+      return null
+    }
+
+    const entries = browseEntriesOf(page.didl)
+    const newEntries = entries.filter(({ key }) => !seenEntries.has(key))
+    newEntries.forEach(({ key }) => seenEntries.add(key))
+    pages.push({ didl: page.didl, entries: newEntries })
+    received += entries.length
+
+    const total = page.totalMatches
+    const isTotalKnown = Number.isInteger(total) && total > 0
+    if (!isTotalKnown || received >= total) break
+    if (entries.length === 0 || newEntries.length === 0) {
+      logWarning(`The box listed ${seenEntries.size} of ${total} entries for ObjectID ${objectId} and then sent no new entries.`)
+      break
+    }
+    if (pageNumber === MAX_BROWSE_PAGES)
+      logWarning(`Stopped listing ObjectID ${objectId} after ${MAX_BROWSE_PAGES} pages (${seenEntries.size} of ${total} entries).`)
+  }
+
+  return mergeBrowsePages(pages)
+}
+
+const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissing }) => {
   const { cd_ctr: controlUrl, cd_service: serviceType } = apiService
 
-  const payload = createBrowsePayload({ serviceType, objectId })
+  const payload = createBrowsePayload({ serviceType, objectId, startingIndex })
   const headers = {
     'Content-Type': 'text/xmlcharset="utf-8"',
     'SOAPAction': `"${serviceType}#Browse"`
   }
+  const target = startingIndex > 0 ? `ObjectID ${objectId} from entry ${startingIndex}` : `ObjectID ${objectId}`
 
   let lastError = null
   let delayBase = BROWSE_RETRY_DELAY
@@ -1631,7 +1666,7 @@ const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {},
   for (let attempt = 1; attempt <= BROWSE_RETRIES + 1; attempt++) {
     try {
       if (attempt > 1) {
-        if (attempt > 2) log(chalk.yellow(`Retrying browse for ObjectID ${objectId} (Attempt ${attempt-1}/${BROWSE_RETRIES})…`))
+        if (attempt > 2) log(chalk.yellow(`Retrying browse for ${target} (Attempt ${attempt-1}/${BROWSE_RETRIES})…`))
         await new Promise(resolve => setTimeout(resolve, delayBase))
         delayBase = Math.min(delayBase * 2, 5000)
       }
@@ -1642,41 +1677,66 @@ const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {},
       })
 
       const parsedResponse = parseXml(response.data)
-      debug('Browse Response SOAP (ObjectID: %s, Attempt: %d): %O', objectId, attempt, parsedResponse)
+      debug('Browse Response SOAP (%s, Attempt: %d): %O', target, attempt, parsedResponse)
 
-      const resultText = findNode({ obj: parsedResponse, path: 'Envelope.Body.BrowseResponse.Result' })
+      const browseResponse = findNode({ obj: parsedResponse, path: 'Envelope.Body.BrowseResponse' })
+      const resultText = findNode({ obj: browseResponse, path: 'Result' })
       if (!resultText || typeof resultText !== 'string') {
-        if (attempt > 1) logWarning(`Could not find valid Result string in Browse response for ObjectID ${objectId} on attempt ${attempt-1}`)
+        if (attempt > 1) logWarning(`Could not find valid Result string in Browse response for ${target} on attempt ${attempt-1}`)
         lastError = new Error('Could not find valid Result string in Browse response')
         continue
       }
 
       const resultXml = parseXml(resultText)
       if (!resultXml || !('DIDL-Lite' in resultXml)) {
-        if (attempt > 1) logWarning(`Failed to parse embedded DIDL-Lite XML for ObjectID ${objectId} on attempt ${attempt-1}`)
+        if (attempt > 1) logWarning(`Failed to parse embedded DIDL-Lite XML for ${target} on attempt ${attempt-1}`)
         lastError = new Error('Failed to parse embedded DIDL-Lite XML')
         continue
       }
 
-      debug('Browse Response DIDL-Lite (ObjectID: %s, Attempt: %d): %O', objectId, attempt, resultXml['DIDL-Lite'])
+      debug('Browse Response DIDL-Lite (%s, Attempt: %d): %O', target, attempt, resultXml['DIDL-Lite'])
 
-      return resultXml['DIDL-Lite'] || {}
+      return {
+        didl: resultXml['DIDL-Lite'] || {},
+        totalMatches: Number(findNode({ obj: browseResponse, path: 'TotalMatches' }))
+      }
 
     } catch (err) {
       lastError = err
       if (isGoneWhenMissing && isNoSuchObject(err)) {
         debug('The box no longer has ObjectID %s; treating it as gone.', objectId)
-        return {}
+        return { isGone: true }
       }
-      if (attempt > 1) logWarning(`Browse attempt ${attempt-1} failed for ObjectID ${objectId}: ${err.message}`)
-      debug('Browse Error Details (ObjectID: %s, Attempt: %d): %O', objectId, attempt, err)
+      if (attempt > 1) logWarning(`Browse attempt ${attempt-1} failed for ${target}: ${err.message}`)
+      debug('Browse Error Details (%s, Attempt: %d): %O', target, attempt, err)
       if (attempt === 1) continue
     }
   }
 
-  logError(`Browse request failed definitively for ObjectID ${objectId} after ${BROWSE_RETRIES} attempts. Last error: ${lastError?.message || 'Unknown'}`)
-  onFailure(lastError ?? new Error('Unknown'))
-  return null
+  logError(`Browse request failed definitively for ${target} after ${BROWSE_RETRIES} attempts. Last error: ${lastError?.message || 'Unknown'}`)
+  return { error: lastError ?? new Error('Unknown') }
+}
+
+const browseEntriesOf = (didl) => ['container', 'item'].flatMap(kind =>
+  [didl[kind]].flat().filter(Boolean).map(node => ({ kind, node, key: browseEntryKey({ kind, node }) })))
+
+const browseEntryKey = ({ kind, node }) => {
+  const id = getXmlAttr({ node, attrName: 'id' })
+  return id === '' ? Symbol(kind) : `${kind}:${id}`
+}
+
+const mergeBrowsePages = (pages) => {
+  if (pages.length === 1) return pages[0].didl
+  const entries = pages.flatMap(page => page.entries)
+  const nodesOf = (kind) => entries.filter(entry => entry.kind === kind).map(entry => entry.node)
+  const { container, item, ...didlAttributes } = pages[0].didl
+  const containers = nodesOf('container')
+  const items = nodesOf('item')
+  return {
+    ...didlAttributes,
+    ...(containers.length > 0 && { container: containers }),
+    ...(items.length > 0 && { item: items })
+  }
 }
 
 const isNoSuchObject = (error) =>
