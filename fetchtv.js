@@ -1635,6 +1635,8 @@ const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {},
     newEntries.forEach(({ key }) => seenEntries.add(key))
     pages.push({ didl: page.didl, entries: newEntries })
     received += entries.length
+    debug('Browse page %d for ObjectID %s: %d entries (%d new) from entry %d; NumberReturned %s, TotalMatches %s',
+      pageNumber, objectId, entries.length, newEntries.length, received - entries.length, page.numberReturned, page.totalMatches)
 
     const total = page.totalMatches
     const isTotalKnown = Number.isInteger(total) && total > 0
@@ -1698,6 +1700,7 @@ const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissi
 
       return {
         didl: resultXml['DIDL-Lite'] || {},
+        numberReturned: findNode({ obj: browseResponse, path: 'NumberReturned' }),
         totalMatches: Number(findNode({ obj: browseResponse, path: 'TotalMatches' }))
       }
 
