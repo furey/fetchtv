@@ -38,6 +38,7 @@ const defaultBox = () => ({
   ignoresStartingIndex: false,
   failsFromIndex: null,
   goneFromIndex: null,
+  resetsFromIndex: null,
   idlessItems: false,
   onBrowse: () => {},
 })
@@ -92,6 +93,7 @@ const answerBrowse = (body) => {
   browses.push(request)
   box.onBrowse(request)
   const { objectId, startingIndex, requestedCount } = request
+  if (box.resetsFromIndex !== null && startingIndex >= box.resetsFromIndex) return { status: 'reset' }
   if (box.goneFromIndex !== null && startingIndex >= box.goneFromIndex) return { status: 500, xml: NO_SUCH_OBJECT }
   if (box.failsFromIndex !== null && startingIndex >= box.failsFromIndex) return { status: 500, xml: '' }
   const entries = entriesFor(objectId)
@@ -162,6 +164,7 @@ before(async () => {
       return res.end()
     }
     const { status, xml } = answerBrowse(await collectBody(req))
+    if (status === 'reset') return req.socket.destroy()
     res.writeHead(status, { 'Content-Type': 'text/xml' })
     res.end(xml)
   })
@@ -332,6 +335,40 @@ test('browse paging: a show deleted between pages drops out without an error', a
   assert.deepEqual(didl, {})
   assert.deepEqual(failures, [])
   assert.deepEqual(incompletes, [])
+})
+
+test('browse paging: a no-such-object error past the end keeps every entry', async () => {
+  box.goneFromIndex = 45
+  const { ids, failures, incompletes } = await browseFolder('100')
+  assert.equal(ids.length, 45)
+  assert.deepEqual(failures, [])
+  assert.deepEqual(incompletes, [])
+})
+
+test('browse paging: a dropped connection on the read past the end marks the folder partial', async () => {
+  box.resetsFromIndex = 45
+  const { ids, incompletes } = await browseFolder('100')
+  assert.equal(ids.length, 45)
+  assert.equal(incompletes.length, 1)
+  assert.deepEqual(startsFor('100'), [0, 24, 45])
+})
+
+test('browse paging: an uncapped folder with one entry returns the same shape as one reply', async () => {
+  box.capFor = () => 1000
+  box.shows = showsOf([1])
+  const { didl } = await browseFolder('100')
+  assert.equal(Array.isArray(didl.item), false)
+  assert.equal(didl.item['@_id'], '100-0')
+})
+
+test('browse paging: once a read past TotalMatches finds more, a later failed page is partial', async () => {
+  box.totalMatches = (_entries, page) => page.length
+  box.shows = showsOf([72])
+  box.failsFromIndex = 48
+  const { ids, incompletes, failures } = await browseFolder('100')
+  assert.equal(ids.length, 48)
+  assert.equal(incompletes.length, 1)
+  assert.deepEqual(failures, [])
 })
 
 test('browse paging: NumberReturned that disagrees with the reply is ignored', async () => {

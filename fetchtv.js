@@ -1689,20 +1689,25 @@ const listFolder = async ({ apiService, objectId, isGoneWhenMissing, signal, isC
   let received = 0
   let total = null
   let firstUpdateId = null
+  let isPastTotal = false
+
+  const partial = (reason) => ({ pages, incomplete: incompleteListing({ objectId, listed: seenEntries.size, total, reason }) })
 
   for (let pageNumber = 1; pageNumber <= MAX_BROWSE_PAGES; pageNumber++) {
-    const isProbe = pageNumber > 1 && (total === null || seenEntries.size >= total)
+    const isBeyondTotal = pageNumber > 1 && (isPastTotal || total === null || seenEntries.size >= total)
+    const isFirstProbe = isBeyondTotal && !isPastTotal
     const page = await browsePage({
-      apiService, objectId, startingIndex: received, isGoneWhenMissing, signal,
-      attempts: isProbe ? 1 : BROWSE_RETRIES + 1
+      apiService, objectId, startingIndex: received, signal,
+      isGoneWhenMissing: isGoneWhenMissing && !isBeyondTotal,
+      attempts: isFirstProbe ? 1 : BROWSE_RETRIES + 1
     })
     if (page.isCancelled || page.isGone) return page
     if (page.error && pageNumber === 1) return page
-    if (page.error && isProbe) {
-      debug('The box refused the read past the end of ObjectID %s; taking the list as complete.', objectId)
+    if (page.error && isFirstProbe && page.isErrorReply) {
+      debug('The box answered the read past the end of ObjectID %s with an error; taking the list as complete.', objectId)
       return { pages }
     }
-    if (page.error) return { pages, incomplete: incompleteListing({ objectId, listed: seenEntries.size, total, reason: `the read from entry ${received} failed (${page.error.message})` }) }
+    if (page.error) return partial(`the read from entry ${received} failed (${page.error.message})`)
 
     if (pageNumber === 1) firstUpdateId = page.updateId
     else if (!isChangeIgnored && hasUpdateChanged({ before: firstUpdateId, after: page.updateId })) return { hasChanged: true }
@@ -1710,24 +1715,22 @@ const listFolder = async ({ apiService, objectId, isGoneWhenMissing, signal, isC
     const entries = browseEntriesOf(page.didl)
     const newEntries = entries.filter(({ key }) => !seenEntries.has(key))
     newEntries.forEach(({ key }) => seenEntries.add(key))
-    pages.push({ didl: page.didl, entries: newEntries })
+    if (pageNumber === 1 || newEntries.length > 0) pages.push({ didl: page.didl, entries: newEntries })
     debug('Browse page %d for ObjectID %s: %d entries (%d new) from entry %d; NumberReturned %s, TotalMatches %s, UpdateID %s',
       pageNumber, objectId, entries.length, newEntries.length, received, page.numberReturned, page.totalMatches, page.updateId)
     received += entries.length
     if (Number.isInteger(page.totalMatches) && page.totalMatches > 0) total = page.totalMatches
+    if (isBeyondTotal && newEntries.length > 0) isPastTotal = true
 
     const isShort = total !== null && seenEntries.size < total
     if (entries.length === 0) {
       if (isShort) logWarning(`The box said ObjectID ${objectId} holds ${total} entries but listed ${seenEntries.size}.`)
       return { pages }
     }
-    if (newEntries.length === 0) {
-      if (!isShort) return { pages }
-      return { pages, incomplete: incompleteListing({ objectId, listed: seenEntries.size, total, reason: 'the box sent the same entries again' }) }
-    }
+    if (newEntries.length === 0) return isShort ? partial('the box sent the same entries again') : { pages }
   }
 
-  return { pages, incomplete: incompleteListing({ objectId, listed: seenEntries.size, total, reason: `fetchtv stopped after ${MAX_BROWSE_PAGES} reads` }) }
+  return partial(`fetchtv stopped after ${MAX_BROWSE_PAGES} reads`)
 }
 
 const incompleteListing = ({ objectId, listed, total, reason }) => ({
@@ -1751,6 +1754,7 @@ const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissi
   const target = startingIndex > 0 ? `ObjectID ${objectId} from entry ${startingIndex}` : `ObjectID ${objectId}`
 
   let lastError = null
+  let isLastErrorAReply = false
   let delayBase = browseRetryDelay
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -1769,6 +1773,7 @@ const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissi
         timeout: attempt === 1 ? REQUEST_TIMEOUT / 2 : REQUEST_TIMEOUT
       })
 
+      isLastErrorAReply = true
       const parsedResponse = parseXml(response.data)
       debug('Browse Response SOAP (%s, Attempt: %d): %O', target, attempt, parsedResponse)
 
@@ -1799,6 +1804,7 @@ const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissi
     } catch (err) {
       if (signal?.aborted) return { isCancelled: true }
       lastError = err
+      isLastErrorAReply = Boolean(err.response)
       if (isGoneWhenMissing && isNoSuchObject(err)) {
         debug('The box no longer has ObjectID %s; treating it as gone.', objectId)
         return { isGone: true }
@@ -1809,7 +1815,7 @@ const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissi
   }
 
   if (attempts > 1) logError(`Browse request failed definitively for ${target} after ${BROWSE_RETRIES} attempts. Last error: ${lastError?.message || 'Unknown'}`)
-  return { error: lastError ?? new Error('Unknown') }
+  return { error: lastError ?? new Error('Unknown'), isErrorReply: isLastErrorAReply }
 }
 
 const waitUnlessCancelled = ({ ms, signal }) => new Promise(resolve => {
