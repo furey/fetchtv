@@ -2,7 +2,7 @@ import { test, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 
-import { getFetchRecordings, browseRequest, LISTING_OUTCOME, testInternals } from '../fetchtv.js'
+import { getFetchRecordings, browseRequest, createRequestManager, LISTING_OUTCOME, testInternals } from '../fetchtv.js'
 
 const CONTROL_PATH = '/upnp/control/ContentDirectory'
 const SERVICE_TYPE = 'urn:schemas-upnp-org:service:ContentDirectory:1'
@@ -39,6 +39,10 @@ const defaultBox = () => ({
   failsFromIndex: null,
   goneFromIndex: null,
   resetsFromIndex: null,
+  hangsPastEndOf: () => false,
+  updateIdWhenEmpty: null,
+  unknownSizes: false,
+  onItem: () => {},
   idlessItems: false,
   onBrowse: () => {},
 })
@@ -57,7 +61,7 @@ const itemXml = ({ showId, itemId }) => {
   const idAttribute = box.idlessItems ? '' : ` id="${itemId}"`
   return `<item${idAttribute} parentID="${showId}" restricted="1"><dc:title>Episode ${itemId}</dc:title>` +
     '<upnp:class>object.item.videoItem</upnp:class>' +
-    `<res protocolInfo="http-get:*:video/mpeg-tts:*" size="1000000" duration="0:30:00">${baseUrl}/item/${itemId}</res></item>`
+    `<res protocolInfo="http-get:*:video/mpeg-tts:*" size="${box.unknownSizes ? -1 : 1000000}" duration="0:30:00">${baseUrl}/item/${itemId}</res></item>`
 }
 
 const entriesFor = (objectId) => {
@@ -79,7 +83,7 @@ const browseEnvelope = ({ page, totalMatches, numberReturned }) => {
   return '<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>' +
     `<u:BrowseResponse xmlns:u="${SERVICE_TYPE}">` +
     `<Result>${escapeXml(didl)}</Result><NumberReturned>${numberReturned}</NumberReturned>` +
-    `${total}<UpdateID>${box.updateId}</UpdateID></u:BrowseResponse></s:Body></s:Envelope>`
+    `${total}<UpdateID>${page.length === 0 && box.updateIdWhenEmpty !== null ? box.updateIdWhenEmpty : box.updateId}</UpdateID></u:BrowseResponse></s:Body></s:Envelope>`
 }
 
 const fieldOf = (body, name) => body.match(new RegExp(`<${name}>([^<]*)</${name}>`))?.[1]
@@ -97,6 +101,7 @@ const answerBrowse = (body) => {
   if (box.goneFromIndex !== null && startingIndex >= box.goneFromIndex) return { status: 500, xml: NO_SUCH_OBJECT }
   if (box.failsFromIndex !== null && startingIndex >= box.failsFromIndex) return { status: 500, xml: '' }
   const entries = entriesFor(objectId)
+  if (startingIndex >= entries.length && startingIndex > 0 && box.hangsPastEndOf(objectId)) return { status: 'hang' }
   const start = box.ignoresStartingIndex ? 0 : startingIndex
   const cap = box.capFor(objectId)
   const wanted = requestedCount > 0 ? Math.min(requestedCount, cap) : cap
@@ -130,13 +135,15 @@ const silenced = async (fn) => {
 
 const listShows = async ({ signal, onProgress = () => {} } = {}) => {
   const outcomes = []
+  const folders = []
   const shows = await silenced(() => getFetchRecordings({
     location: location(),
     onProgress,
     signal,
     onOutcome: (outcome) => outcomes.push(outcome),
+    onFolderRead: (folder) => folders.push(folder),
   }))
-  return { shows, outcomes, byTitle: Object.fromEntries(shows.map(show => [show.title, show])) }
+  return { shows, outcomes, folders, byTitle: Object.fromEntries(shows.map(show => [show.title, show])) }
 }
 
 const browseFolder = async (objectId) => {
@@ -159,11 +166,17 @@ const totalItems = () => box.shows.reduce((total, show) => total + show.items.le
 
 before(async () => {
   server = createServer(async (req, res) => {
+    if (req.url.startsWith('/item/')) {
+      box.onItem(req)
+      res.writeHead(200, { 'Content-Length': '1000' })
+      return res.end()
+    }
     if (req.method !== 'POST' || req.url !== CONTROL_PATH) {
       res.writeHead(404)
       return res.end()
     }
     const { status, xml } = answerBrowse(await collectBody(req))
+    if (status === 'hang') return
     if (status === 'reset') return req.socket.destroy()
     res.writeHead(status, { 'Content-Type': 'text/xml' })
     res.end(xml)
@@ -171,10 +184,14 @@ before(async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   baseUrl = `http://127.0.0.1:${server.address().port}`
   testInternals.setBrowseRetryDelay(10)
+  testInternals.setBrowseTimeout(1000)
+  testInternals.setMinBrowseDelay(1)
 })
 
 after(async () => {
   testInternals.setBrowseRetryDelay()
+  testInternals.setBrowseTimeout()
+  testInternals.setMinBrowseDelay()
   server.closeAllConnections()
   await new Promise(resolve => server.close(resolve))
 })
@@ -273,12 +290,84 @@ test('browse paging: a first page that keeps failing fails the folder', async ()
   assert.equal(failures.length, 1)
 })
 
-test('browse paging: an overstated TotalMatches ending in an empty page is complete', async () => {
+test('browse paging: an overstated TotalMatches ending in an empty page keeps every entry and is partial', async () => {
   box.totalMatches = (entries) => entries.length + 10
   const { ids, incompletes } = await browseFolder('100')
   assert.equal(ids.length, 45)
-  assert.deepEqual(incompletes, [])
+  assert.equal(incompletes.length, 1)
   assert.deepEqual(startsFor('100'), [0, 24, 45])
+})
+
+test('browse paging: a box that says 45, lists 24, then sends an empty page is partial', async () => {
+  box.shows = showsOf([24])
+  box.totalMatches = () => 45
+  const { ids, incompletes } = await browseFolder('100')
+  assert.equal(ids.length, 24)
+  assert.equal(incompletes.length, 1)
+  assert.equal(incompletes[0].total, 45)
+})
+
+test('browse paging: a box that never answers past the end everywhere lists every folder as complete', async () => {
+  box.hangsPastEndOf = () => true
+  const { byTitle, outcomes, folders } = await listShows()
+  box.shows.forEach(show => assert.equal(byTitle[show.title].items.length, show.items.length, show.title))
+  assert.deepEqual(outcomes, [{ outcome: LISTING_OUTCOME.OK }])
+  assert.ok(folders.every(folder => folder.probe === 'no-answer' && !folder.isPartial))
+})
+
+test('browse paging: a show that never answers past the end, on a box whose root answered, is partial', async () => {
+  box.hangsPastEndOf = (objectId) => objectId === '100'
+  const { byTitle, outcomes } = await listShows()
+  assert.equal(byTitle['Show 100'].items.length, 45)
+  assert.equal(byTitle['Show 100'].incomplete, true)
+  assert.equal(outcomes[0].outcome, LISTING_OUTCOME.PARTIAL)
+  assert.deepEqual(outcomes[0].folders, ['Show 100'])
+})
+
+test('browse paging: UpdateID 0 on an empty reply does not restart the folder', async () => {
+  box.updateId = 5
+  box.updateIdWhenEmpty = 0
+  const { ids } = await browseFolder('100')
+  assert.equal(ids.length, 45)
+  assert.deepEqual(startsFor('100'), [0, 24, 45])
+})
+
+test('browse paging: a no-such-object error on page 2 of a show with no TotalMatches drops the show', async () => {
+  box.totalMatches = () => 0
+  box.goneFromIndex = 24
+  const { didl, failures } = await browseFolder('100')
+  assert.deepEqual(didl, {})
+  assert.deepEqual(failures, [])
+})
+
+test('browse paging: each folder read is reported with its reads, total, unique entries, and probe result', async () => {
+  const { folders } = await listShows()
+  const show = folders.find(folder => folder.title === 'Show 100')
+  assert.deepEqual(
+    { reads: show.reads, totalMatches: show.totalMatches, unique: show.unique, probe: show.probe, isPartial: show.isPartial },
+    { reads: 3, totalMatches: 45, unique: 45, probe: 'empty', isPartial: false }
+  )
+  assert.equal(folders.length, 2 + box.shows.length)
+})
+
+test('browse paging: each page takes its own queue slot, so a long show does not hold back the others', async () => {
+  box.shows = showsOf([60, ...Array(10).fill(1)])
+  box.capFor = (objectId) => (objectId === '100' ? 1 : 1000)
+  await listShows()
+  const showReads = browses.filter(browse => browse.objectId !== '0' && browse.objectId !== RECORDINGS_ID)
+  const lastSmallShowRead = showReads.findLastIndex(browse => browse.objectId !== '100')
+  const longShowReadsBefore = showReads.slice(0, lastSmallShowRead).filter(browse => browse.objectId === '100').length
+  assert.ok(longShowReadsBefore < 10, `the long show had ${longShowReadsBefore} reads before the small shows finished`)
+})
+
+test('browse paging: a cancel while sizes are probed reports cancelled', async () => {
+  const controller = new AbortController()
+  box.shows = showsOf([2])
+  box.unknownSizes = true
+  box.onItem = () => controller.abort()
+  const { shows, outcomes } = await listShows({ signal: controller.signal })
+  assert.deepEqual(shows, [])
+  assert.deepEqual(outcomes, [{ outcome: LISTING_OUTCOME.CANCELLED }])
 })
 
 test('browse paging: an error past the end after the TotalMatches entries is the end of the list', async () => {
@@ -424,4 +513,19 @@ test('browse paging: a lone container or item on a later page still merges into 
   box.capFor = () => 1
   assert.deepEqual((await browseFolder(RECORDINGS_ID)).ids, ['100'])
   assert.deepEqual((await browseFolder('100')).ids, ['100-0', '100-1', '100-2', '100-3'])
+})
+
+test('request queue: a probe read skips the spacing between requests, other reads wait for it', async () => {
+  const manager = createRequestManager({ initialDelay: 400, minDelay: 400 })
+  const started = []
+  const read = (name) => async () => { started.push({ name, at: Date.now() }) }
+  const startedAt = Date.now()
+  await Promise.all([
+    manager.enqueue(read('first')),
+    manager.enqueue(read('spaced')),
+    manager.enqueue(read('probe'), undefined, { skipsSpacing: true }),
+  ])
+  const at = Object.fromEntries(started.map(entry => [entry.name, entry.at - startedAt]))
+  assert.ok(at.probe < 200, `the probe waited ${at.probe} ms`)
+  assert.ok(at.spaced >= 350, `the spaced read started after ${at.spaced} ms`)
 })
