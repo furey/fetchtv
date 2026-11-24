@@ -435,7 +435,7 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
   const browseOptionsFor = ({ title, priority }) => ({
     signal,
     pastEnd,
-    runPage: ({ isProbe }, read) => requestManager.enqueue(read, priority, { skipsSpacing: isProbe, signal }),
+    runPage: ({ isProbe }, read) => requestManager.enqueue(read, priority, { isProbe, signal }),
     onRead: (summary) => onFolderRead({ title, ...summary }),
     onIncomplete: markPartial(title)
   })
@@ -1637,25 +1637,24 @@ const createRequestManager = ({
     const now = Date.now()
     const timeSinceLastRequest = now - state.lastRequestTime
     const isSpacingDue = timeSinceLastRequest < state.currentDelay
-    const index = isSpacingDue ? state.queue.findIndex(entry => entry.skipsSpacing) : 0
+    const index = isSpacingDue ? state.queue.findIndex(entry => entry.isProbe) : 0
 
     if (index === -1) {
       setTimeout(() => processQueue(), state.currentDelay - timeSinceLastRequest)
       return
     }
 
-    const [{ fn, resolve, reject, skipsSpacing }] = state.queue.splice(index, 1)
+    const [{ fn, resolve, reject, isProbe }] = state.queue.splice(index, 1)
     state.active++
-    if (!skipsSpacing) state.lastRequestTime = now
+    if (!isProbe) state.lastRequestTime = now
     const start = now
 
     try {
       const result = await fn()
-      const duration = Date.now() - start
-      updateStats({ duration, success: true })
+      if (!isProbe) updateStats({ duration: Date.now() - start, success: true })
       resolve(result)
     } catch (error) {
-      updateStats({ duration: 600, success: false })
+      if (!isProbe) updateStats({ duration: 600, success: false })
       reject(error)
     } finally {
       state.active--
@@ -1663,9 +1662,9 @@ const createRequestManager = ({
     }
   }
 
-  const enqueue = (fn, priority = REQUEST_QUEUE_PRIORITY.SHOW, { skipsSpacing = false, signal } = {}) =>
+  const enqueue = (fn, priority = REQUEST_QUEUE_PRIORITY.SHOW, { isProbe = false, signal } = {}) =>
     new Promise((resolve, reject) => {
-      state.queue.push({ fn, priority, resolve, reject, skipsSpacing, signal })
+      state.queue.push({ fn, priority, resolve, reject, isProbe, signal })
       state.queue.sort((a, b) => a.priority - b.priority)
       processQueue()
     })

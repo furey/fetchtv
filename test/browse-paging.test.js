@@ -529,7 +529,7 @@ test('request queue: a probe read skips the spacing between requests, other read
   await Promise.all([
     manager.enqueue(read('first')),
     manager.enqueue(read('spaced')),
-    manager.enqueue(read('probe'), undefined, { skipsSpacing: true }),
+    manager.enqueue(read('probe'), undefined, { isProbe: true }),
   ])
   const at = Object.fromEntries(started.map(entry => [entry.name, entry.at - startedAt]))
   assert.ok(at.probe < 200, `the probe waited ${at.probe} ms`)
@@ -554,4 +554,15 @@ test('browse paging: a cancel with many shows queued settles at once instead of 
   } finally {
     testInternals.setMinBrowseDelay(1)
   }
+})
+
+test('browse paging: probes that hang past the end do not slow the rest of the listing', async () => {
+  box.shows = showsOf(Array.from({ length: 50 }, () => 2))
+  box.capFor = () => 1000
+  box.hangsPastEndOf = (objectId) => objectId !== '0' && objectId !== RECORDINGS_ID
+  const startedAt = Date.now()
+  const { shows } = await listShows()
+  const ms = Date.now() - startedAt
+  assert.equal(shows.length, 50)
+  assert.ok(ms < 9000, `the listing took ${ms} ms`)
 })
