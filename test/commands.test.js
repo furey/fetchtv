@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const projectRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
@@ -30,6 +32,7 @@ const MAX_OCTET_RECORDING = 4398046510080
 let server = null
 let serverPort = null
 let rootFixture = 'browse-root.xml'
+let overstatedShowId = null
 
 const startServer = () =>
   new Promise((resolve) => {
@@ -49,8 +52,9 @@ const startServer = () =>
             ? 'browse-show-items.xml' :
           'browse-empty.xml'
         )
+        const reply = readFixture(fixture).replaceAll(FIXTURE_ITEM_HOST, `http://127.0.0.1:${serverPort}`)
         res.writeHead(200, { 'Content-Type': 'text/xml' })
-        res.end(readFixture(fixture).replaceAll(FIXTURE_ITEM_HOST, `http://127.0.0.1:${serverPort}`))
+        res.end(objectId === overstatedShowId ? reply.replace('<TotalMatches>3</TotalMatches>', '<TotalMatches>5</TotalMatches>') : reply)
         return
       }
       if (req.method === 'HEAD' && req.url.startsWith('/item/')) {
@@ -219,4 +223,32 @@ test('CLI: a filter that matches nothing gets no box hint', async () => {
   const { stdout } = await runCli(['recordings', '--ip', '127.0.0.1', '--port', String(serverPort), '--show', 'nothing-matches'])
   assert.match(stdout, /No Recordings found matching criteria!/)
   assert.doesNotMatch(stdout, /Fetch service|Restart the box|is empty/)
+})
+
+test('CLI: a partial listing exits with code 2, marks the show in --json, and prints the hint once', async () => {
+  overstatedShowId = '10'
+  try {
+    const { code, stdout } = await runCli(['recordings', '--ip', '127.0.0.1', '--port', String(serverPort), '--json'])
+    assert.equal(code, 2)
+    const parsed = JSON.parse(stdout.match(/=== Start JSON Output ===\s*([\s\S]*?)\s*=== End JSON Output ===/)[1])
+    assert.deepEqual(parsed.filter(show => show.incomplete).map(show => show.id), [10])
+    assert.equal(parsed.filter(show => !show.incomplete).length, 2)
+    assert.equal(stdout.match(/Some recordings could not be read from the box\. Try again\./g).length, 1)
+  } finally {
+    overstatedShowId = null
+  }
+})
+
+test('CLI: a partial listing before a save exits with code 2 when no recording failed', async () => {
+  const savePath = await mkdtemp(path.join(tmpdir(), 'fetchtv-partial-save-'))
+  overstatedShowId = '10'
+  try {
+    const { code, stdout } = await runCli(['recordings', '--ip', '127.0.0.1', '--port', String(serverPort), '--show', 'bluey', '--title', 'nothing-matches', '--save', savePath], { timeoutMs: 60000 })
+    assert.doesNotMatch(stdout, /\b[1-9]\d* failed\b/)
+    assert.equal(code, 2)
+    assert.equal(stdout.match(/Some recordings could not be read from the box\. Try again\./g).length, 1)
+  } finally {
+    overstatedShowId = null
+    await rm(savePath, { recursive: true, force: true })
+  }
 })
