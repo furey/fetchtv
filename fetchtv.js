@@ -435,7 +435,7 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
   const browseOptionsFor = ({ title, priority }) => ({
     signal,
     pastEnd,
-    runPage: ({ isProbe }, read) => requestManager.enqueue(read, priority, { skipsSpacing: isProbe }),
+    runPage: ({ isProbe }, read) => requestManager.enqueue(read, priority, { skipsSpacing: isProbe, signal }),
     onRead: (summary) => onFolderRead({ title, ...summary }),
     onIncomplete: markPartial(title)
   })
@@ -1623,7 +1623,15 @@ const createRequestManager = ({
     }
   }
 
+  const settleCancelled = () => {
+    const cancelled = state.queue.filter(entry => entry.signal?.aborted)
+    if (cancelled.length === 0) return
+    state.queue = state.queue.filter(entry => !entry.signal?.aborted)
+    cancelled.forEach(entry => Promise.resolve().then(entry.fn).then(entry.resolve, entry.reject))
+  }
+
   const processQueue = async () => {
+    settleCancelled()
     if (state.active >= state.concurrency || state.queue.length === 0) return
 
     const now = Date.now()
@@ -1655,9 +1663,9 @@ const createRequestManager = ({
     }
   }
 
-  const enqueue = (fn, priority = REQUEST_QUEUE_PRIORITY.SHOW, { skipsSpacing = false } = {}) =>
+  const enqueue = (fn, priority = REQUEST_QUEUE_PRIORITY.SHOW, { skipsSpacing = false, signal } = {}) =>
     new Promise((resolve, reject) => {
-      state.queue.push({ fn, priority, resolve, reject, skipsSpacing })
+      state.queue.push({ fn, priority, resolve, reject, skipsSpacing, signal })
       state.queue.sort((a, b) => a.priority - b.priority)
       processQueue()
     })
@@ -1721,7 +1729,7 @@ const listFolder = async ({ apiService, objectId, isGoneWhenMissing, signal, run
   let reads = 0
   let probe = 'none'
 
-  const summarise = (isPartial) => ({ objectId, reads, totalMatches: total, unique: seenEntries.size, probe, isPartial })
+  const summarise = (isPartial, isFailed = false) => ({ objectId, reads, totalMatches: total, unique: seenEntries.size, probe, isPartial, isFailed })
   const done = () => ({ pages, summary: summarise(false) })
   const partial = (reason) => ({
     pages,
@@ -1742,7 +1750,7 @@ const listFolder = async ({ apiService, objectId, isGoneWhenMissing, signal, run
     }))
     if (page.isCancelled) return page
     if (page.isGone) return { ...page, summary: summarise(false) }
-    if (page.error && pageNumber === 1) return page
+    if (page.error && pageNumber === 1) return { ...page, summary: summarise(false, true) }
     if (page.error && isFirstProbe && page.isErrorReply) {
       debug('The box answered the read past the end of ObjectID %s with an error; taking the list as complete.', objectId)
       probe = 'error-reply'

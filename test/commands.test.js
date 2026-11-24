@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const projectRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
@@ -234,5 +236,19 @@ test('CLI: a partial listing exits with code 2, marks the show in --json, and pr
     assert.equal(stdout.match(/Some recordings could not be read from the box\. Try again\./g).length, 1)
   } finally {
     overstatedShowId = null
+  }
+})
+
+test('CLI: a partial listing before a save exits with code 2 when no recording failed', async () => {
+  const savePath = await mkdtemp(path.join(tmpdir(), 'fetchtv-partial-save-'))
+  overstatedShowId = '10'
+  try {
+    const { code, stdout } = await runCli(['recordings', '--ip', '127.0.0.1', '--port', String(serverPort), '--show', 'bluey', '--title', 'nothing-matches', '--save', savePath], { timeoutMs: 60000 })
+    assert.doesNotMatch(stdout, /\b[1-9]\d* failed\b/)
+    assert.equal(code, 2)
+    assert.equal(stdout.match(/Some recordings could not be read from the box\. Try again\./g).length, 1)
+  } finally {
+    overstatedShowId = null
+    await rm(savePath, { recursive: true, force: true })
   }
 })

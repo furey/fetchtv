@@ -283,11 +283,16 @@ test('browse paging: a later page that keeps failing keeps the entries read and 
   assert.deepEqual([...outcomes[0].folders].sort(), ['Show 100', 'Show 104'])
 })
 
-test('browse paging: a first page that keeps failing fails the folder', async () => {
+test('browse paging: a first page that keeps failing fails the folder and is still reported as read', async () => {
   box.failsFromIndex = 0
   const { didl, failures } = await browseFolder('100')
   assert.equal(didl, null)
   assert.equal(failures.length, 1)
+  box.shows = showsOf([3, 45])
+  box.failsFromIndex = null
+  box.onBrowse = ({ objectId }) => { box.failsFromIndex = objectId === '101' ? 0 : null }
+  const { folders } = await listShows()
+  assert.equal(folders.find(folder => folder.title === 'Show 101').isFailed, true)
 })
 
 test('browse paging: an overstated TotalMatches ending in an empty page keeps every entry and is partial', async () => {
@@ -500,8 +505,9 @@ test('browse paging: a cancelled listing stops reading pages', async () => {
   box.shows = showsOf(Array.from({ length: 40 }, () => 45))
   box.onBrowse = ({ objectId }) => { if (objectId === '105') controller.abort() }
   const { shows, outcomes } = await listShows({ signal: controller.signal })
-  const browsesAtCancel = browses.length
   await new Promise(resolve => setTimeout(resolve, 100))
+  const browsesAtCancel = browses.length
+  await new Promise(resolve => setTimeout(resolve, 200))
   assert.deepEqual(shows, [])
   assert.deepEqual(outcomes, [{ outcome: LISTING_OUTCOME.CANCELLED }])
   assert.equal(browses.length, browsesAtCancel)
@@ -528,4 +534,24 @@ test('request queue: a probe read skips the spacing between requests, other read
   const at = Object.fromEntries(started.map(entry => [entry.name, entry.at - startedAt]))
   assert.ok(at.probe < 200, `the probe waited ${at.probe} ms`)
   assert.ok(at.spaced >= 350, `the spaced read started after ${at.spaced} ms`)
+})
+
+test('browse paging: a cancel with many shows queued settles at once instead of draining the queue', async () => {
+  const controller = new AbortController()
+  box.shows = showsOf(Array.from({ length: 40 }, () => 2))
+  let abortedAt = null
+  box.onBrowse = ({ objectId }) => {
+    if (objectId !== '101' || abortedAt) return
+    abortedAt = Date.now()
+    controller.abort()
+  }
+  testInternals.setMinBrowseDelay(100)
+  try {
+    const { outcomes } = await listShows({ signal: controller.signal })
+    const settledAfter = Date.now() - abortedAt
+    assert.deepEqual(outcomes, [{ outcome: LISTING_OUTCOME.CANCELLED }])
+    assert.ok(settledAfter < 500, `the listing settled ${settledAfter} ms after the cancel`)
+  } finally {
+    testInternals.setMinBrowseDelay(1)
+  }
 })
