@@ -122,7 +122,9 @@ const LISTING_OUTCOME = Object.freeze({
   BROWSE_FAILED: 'browse-failed',
   NO_RECORDINGS_FOLDER: 'no-recordings-folder',
   RECORDINGS_BROWSE_FAILED: 'recordings-browse-failed',
-  ITEMS_BROWSE_FAILED: 'items-browse-failed'
+  ITEMS_BROWSE_FAILED: 'items-browse-failed',
+  PARTIAL: 'partial',
+  CANCELLED: 'cancelled'
 })
 
 const LISTING_OUTCOME_HINTS = {
@@ -131,7 +133,8 @@ const LISTING_OUTCOME_HINTS = {
   [LISTING_OUTCOME.NO_RECORDINGS_FOLDER]: 'The box lists no Recordings folder. A Fetch box that has lost its Fetch service (account cancelled or suspended, or no internet) shows its setup screen on the TV and lists no recordings until that is fixed.',
   [LISTING_OUTCOME.RECORDINGS_BROWSE_FAILED]: 'The box did not answer the request for its Recordings folder. Restart the box and try again.',
   [LISTING_OUTCOME.ITEMS_BROWSE_FAILED]: 'The box listed its shows but did not answer the requests for their recordings. Restart the box and try again.',
-  [LISTING_OUTCOME.EMPTY]: 'The box answered, and its Recordings folder is empty.'
+  [LISTING_OUTCOME.EMPTY]: 'The box answered, and its Recordings folder is empty.',
+  [LISTING_OUTCOME.PARTIAL]: 'Some recordings could not be read from the box. Try again.'
 }
 
 const httpClient = axios.create({
@@ -222,12 +225,26 @@ const main = async () => {
 
     log(`Retrieving Fetch TV ${hasShowsCommand ? 'shows' : 'recordings'}…`)
     let listingOutcome = null
-    const recordings = await getFetchRecordings({ location: fetchServer, filters, onOutcome: ({ outcome }) => { listingOutcome = outcome } })
+    let partialFolders = []
+    const recordings = await getFetchRecordings({
+      location: fetchServer,
+      filters,
+      onOutcome: ({ outcome, folders = [] }) => {
+        listingOutcome = outcome
+        if (outcome === LISTING_OUTCOME.PARTIAL) partialFolders = folders
+      }
+    })
+    const warnIfPartial = () => {
+      if (listingOutcome !== LISTING_OUTCOME.PARTIAL) return
+      logWarning(`${LISTING_OUTCOME_HINTS[LISTING_OUTCOME.PARTIAL]} Incomplete: ${partialFolders.join(', ')}.`)
+    }
 
     if (!argv.save) {
       printRecordings({ recordings, jsonOutput: argv.json, showsOnly: hasShowsCommand, listingOutcome })
+      warnIfPartial()
     } else {
-      if (LISTING_OUTCOME_HINTS[listingOutcome]) logWarning(LISTING_OUTCOME_HINTS[listingOutcome])
+      warnIfPartial()
+      if (listingOutcome !== LISTING_OUTCOME.PARTIAL && LISTING_OUTCOME_HINTS[listingOutcome]) logWarning(LISTING_OUTCOME_HINTS[listingOutcome])
       await handleSaveAction({
         recordings,
         savePath: path.resolve(argv.save),
@@ -394,7 +411,7 @@ const parseSsdpResponse = (message) => {
     .map(([, name, value]) => [name.toUpperCase(), value]))
 }
 
-const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcome = () => {} }) => {
+const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcome = () => {}, signal }) => {
   const { folderFilter = [], excludeFilter = [], titleFilter = [], showsOnly = false, isRecordingFilter = false } = filters
 
   const apiService = await getApiService(location)
@@ -405,12 +422,24 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
   }
 
   const requestManager = createRequestManager({ debug: argv.debug })
+  const partialFolders = []
+  const markPartial = (title) => () => { partialFolders.push(title) }
+  const isCancelled = () => {
+    if (!signal?.aborted) return false
+    onOutcome({ outcome: LISTING_OUTCOME.CANCELLED })
+    return true
+  }
+  const finishListing = () => {
+    if (partialFolders.length === 0) return onOutcome({ outcome: LISTING_OUTCOME.OK })
+    onOutcome({ outcome: LISTING_OUTCOME.PARTIAL, folders: partialFolders })
+  }
 
   let rootError = null
   const baseFolders = await requestManager.enqueue(
-    () => findDirectories({ apiService, objectId: '0', onFailure: (error) => { rootError = error } }),
+    () => findDirectories({ apiService, objectId: '0', onFailure: (error) => { rootError = error }, onIncomplete: markPartial('Root'), signal }),
     REQUEST_QUEUE_PRIORITY.ROOT
   )
+  if (isCancelled()) return []
   if (!baseFolders) {
     logError('Failed to browse root directory (ObjectID 0) after retries. Cannot list recordings.')
     onOutcome({ outcome: LISTING_OUTCOME.BROWSE_FAILED, error: rootError?.message })
@@ -426,9 +455,10 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
 
   let recordingsError = null
   const showFolders = await requestManager.enqueue(
-    () => findDirectories({ apiService, objectId: recordingsFolder.id, onFailure: (error) => { recordingsError = error } }),
+    () => findDirectories({ apiService, objectId: recordingsFolder.id, onFailure: (error) => { recordingsError = error }, onIncomplete: markPartial('Recordings'), signal }),
     REQUEST_QUEUE_PRIORITY.SHOWS_FOLDER
   )
+  if (isCancelled()) return []
   if (!showFolders) {
     logError(`Failed to browse the main "Recordings" directory (ObjectID ${recordingsFolder.id}) after retries. Cannot list shows.`)
     onOutcome({ outcome: LISTING_OUTCOME.RECORDINGS_BROWSE_FAILED, error: recordingsError?.message })
@@ -448,7 +478,7 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
   })
 
   if (showsOnly || filteredShows.length === 0) {
-    onOutcome({ outcome: LISTING_OUTCOME.OK })
+    finishListing()
     return filteredShows.map(show => ({ ...show, items: [] }))
   }
 
@@ -465,7 +495,15 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
   for (let i = 0; i < filteredShows.length; i += batchSize) {
     const batch = filteredShows.slice(i, i + batchSize)
     const batchPromises = batch.map(async show => {
-      let items = await requestManager.enqueue(() => findItems({ apiService, objectId: show.id, showTitle: show.title, onFailure: (error) => { itemsErrors.push(error) } }))
+      if (signal?.aborted) return null
+      let items = await requestManager.enqueue(() => findItems({
+        apiService, objectId: show.id, showTitle: show.title, signal,
+        onFailure: (error) => {
+          itemsErrors.push(error)
+          partialFolders.push(show.title)
+        },
+        onIncomplete: markPartial(show.title)
+      }))
 
       if (titleFilter.length > 0)
         items = items.filter(item => titleFilter.some(t => item.title.toLowerCase().includes(t)))
@@ -479,6 +517,12 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
 
     const batchResults = await Promise.all(batchPromises)
     listedShows.push(...batchResults.filter(Boolean))
+    if (signal?.aborted) break
+  }
+
+  if (isCancelled()) {
+    progressBar.stop()
+    return []
   }
 
   const sizedShows = await resolveUnknownSizes({ shows: listedShows, limit: limitLengthProbe })
@@ -493,7 +537,7 @@ const getFetchRecordings = async ({ location, filters = {}, onProgress, onOutcom
     return results
   }
 
-  onOutcome({ outcome: LISTING_OUTCOME.OK })
+  finishListing()
   return results
 }
 
@@ -1617,42 +1661,84 @@ const createBrowsePayload = ({ serviceType, objectId, startingIndex = 0, request
  </s:Body>
 </s:Envelope>`
 
-const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {}, isGoneWhenMissing = false }) => {
+const browseRequest = async ({ apiService, objectId = '0', onFailure = () => {}, onIncomplete = () => {}, isGoneWhenMissing = false, signal }) => {
+  const folder = { apiService, objectId, isGoneWhenMissing, signal }
+  let listing = await listFolder(folder)
+  if (listing.hasChanged) {
+    debug('The box changed ObjectID %s while it was listed; listing it again from the start.', objectId)
+    listing = await listFolder({ ...folder, isChangeIgnored: true })
+  }
+  if (listing.isCancelled) return null
+  if (listing.isGone) return {}
+  if (listing.error) {
+    onFailure(listing.error)
+    return null
+  }
+  if (listing.incomplete) {
+    logWarning(`The box sent only part of ObjectID ${objectId}: ${listing.incomplete.message}`)
+    onIncomplete(listing.incomplete)
+  }
+  return mergeBrowsePages(listing.pages)
+}
+
+const listFolder = async ({ apiService, objectId, isGoneWhenMissing, signal, isChangeIgnored = false }) => {
   const pages = []
   const seenEntries = new Set()
   let received = 0
+  let total = null
+  let firstUpdateId = null
 
   for (let pageNumber = 1; pageNumber <= MAX_BROWSE_PAGES; pageNumber++) {
-    const page = await browsePage({ apiService, objectId, startingIndex: received, isGoneWhenMissing })
-    if (page.isGone) return {}
-    if (page.error) {
-      onFailure(page.error)
-      return null
+    const isProbe = pageNumber > 1 && (total === null || seenEntries.size >= total)
+    const page = await browsePage({
+      apiService, objectId, startingIndex: received, isGoneWhenMissing, signal,
+      attempts: isProbe ? 1 : BROWSE_RETRIES + 1
+    })
+    if (page.isCancelled || page.isGone) return page
+    if (page.error && pageNumber === 1) return page
+    if (page.error && isProbe) {
+      debug('The box refused the read past the end of ObjectID %s; taking the list as complete.', objectId)
+      return { pages }
     }
+    if (page.error) return { pages, incomplete: incompleteListing({ objectId, listed: seenEntries.size, total, reason: `the read from entry ${received} failed (${page.error.message})` }) }
+
+    if (pageNumber === 1) firstUpdateId = page.updateId
+    else if (!isChangeIgnored && hasUpdateChanged({ before: firstUpdateId, after: page.updateId })) return { hasChanged: true }
 
     const entries = browseEntriesOf(page.didl)
     const newEntries = entries.filter(({ key }) => !seenEntries.has(key))
     newEntries.forEach(({ key }) => seenEntries.add(key))
     pages.push({ didl: page.didl, entries: newEntries })
+    debug('Browse page %d for ObjectID %s: %d entries (%d new) from entry %d; NumberReturned %s, TotalMatches %s, UpdateID %s',
+      pageNumber, objectId, entries.length, newEntries.length, received, page.numberReturned, page.totalMatches, page.updateId)
     received += entries.length
-    debug('Browse page %d for ObjectID %s: %d entries (%d new) from entry %d; NumberReturned %s, TotalMatches %s',
-      pageNumber, objectId, entries.length, newEntries.length, received - entries.length, page.numberReturned, page.totalMatches)
+    if (Number.isInteger(page.totalMatches) && page.totalMatches > 0) total = page.totalMatches
 
-    const total = page.totalMatches
-    const isTotalKnown = Number.isInteger(total) && total > 0
-    if (!isTotalKnown || received >= total) break
-    if (entries.length === 0 || newEntries.length === 0) {
-      logWarning(`The box listed ${seenEntries.size} of ${total} entries for ObjectID ${objectId} and then sent no new entries.`)
-      break
+    const isShort = total !== null && seenEntries.size < total
+    if (entries.length === 0) {
+      if (isShort) logWarning(`The box said ObjectID ${objectId} holds ${total} entries but listed ${seenEntries.size}.`)
+      return { pages }
     }
-    if (pageNumber === MAX_BROWSE_PAGES)
-      logWarning(`Stopped listing ObjectID ${objectId} after ${MAX_BROWSE_PAGES} pages (${seenEntries.size} of ${total} entries).`)
+    if (newEntries.length === 0) {
+      if (!isShort) return { pages }
+      return { pages, incomplete: incompleteListing({ objectId, listed: seenEntries.size, total, reason: 'the box sent the same entries again' }) }
+    }
   }
 
-  return mergeBrowsePages(pages)
+  return { pages, incomplete: incompleteListing({ objectId, listed: seenEntries.size, total, reason: `fetchtv stopped after ${MAX_BROWSE_PAGES} reads` }) }
 }
 
-const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissing }) => {
+const incompleteListing = ({ objectId, listed, total, reason }) => ({
+  objectId,
+  listed,
+  total,
+  message: `listed ${listed}${total === null ? '' : ` of ${total}`} entries, then ${reason}.`
+})
+
+const hasUpdateChanged = ({ before, after }) =>
+  Number.isInteger(before) && Number.isInteger(after) && before !== after
+
+const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissing, signal, attempts = BROWSE_RETRIES + 1 }) => {
   const { cd_ctr: controlUrl, cd_service: serviceType } = apiService
 
   const payload = createBrowsePayload({ serviceType, objectId, startingIndex })
@@ -1665,16 +1751,19 @@ const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissi
   let lastError = null
   let delayBase = BROWSE_RETRY_DELAY
 
-  for (let attempt = 1; attempt <= BROWSE_RETRIES + 1; attempt++) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (signal?.aborted) return { isCancelled: true }
     try {
       if (attempt > 1) {
         if (attempt > 2) log(chalk.yellow(`Retrying browse for ${target} (Attempt ${attempt-1}/${BROWSE_RETRIES})…`))
-        await new Promise(resolve => setTimeout(resolve, delayBase))
+        await waitUnlessCancelled({ ms: delayBase, signal })
+        if (signal?.aborted) return { isCancelled: true }
         delayBase = Math.min(delayBase * 2, 5000)
       }
 
       const response = await httpClient.post(controlUrl, payload, {
         headers,
+        signal,
         timeout: attempt === 1 ? REQUEST_TIMEOUT / 2 : REQUEST_TIMEOUT
       })
 
@@ -1701,10 +1790,12 @@ const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissi
       return {
         didl: resultXml['DIDL-Lite'] || {},
         numberReturned: findNode({ obj: browseResponse, path: 'NumberReturned' }),
-        totalMatches: Number(findNode({ obj: browseResponse, path: 'TotalMatches' }))
+        totalMatches: Number(findNode({ obj: browseResponse, path: 'TotalMatches' })),
+        updateId: findNode({ obj: browseResponse, path: 'UpdateID' })
       }
 
     } catch (err) {
+      if (signal?.aborted) return { isCancelled: true }
       lastError = err
       if (isGoneWhenMissing && isNoSuchObject(err)) {
         debug('The box no longer has ObjectID %s; treating it as gone.', objectId)
@@ -1712,20 +1803,29 @@ const browsePage = async ({ apiService, objectId, startingIndex, isGoneWhenMissi
       }
       if (attempt > 1) logWarning(`Browse attempt ${attempt-1} failed for ${target}: ${err.message}`)
       debug('Browse Error Details (%s, Attempt: %d): %O', target, attempt, err)
-      if (attempt === 1) continue
     }
   }
 
-  logError(`Browse request failed definitively for ${target} after ${BROWSE_RETRIES} attempts. Last error: ${lastError?.message || 'Unknown'}`)
+  if (attempts > 1) logError(`Browse request failed definitively for ${target} after ${BROWSE_RETRIES} attempts. Last error: ${lastError?.message || 'Unknown'}`)
   return { error: lastError ?? new Error('Unknown') }
 }
+
+const waitUnlessCancelled = ({ ms, signal }) => new Promise(resolve => {
+  const finish = () => {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', finish)
+    resolve()
+  }
+  const timer = setTimeout(finish, ms)
+  signal?.addEventListener('abort', finish, { once: true })
+})
 
 const browseEntriesOf = (didl) => ['container', 'item'].flatMap(kind =>
   [didl[kind]].flat().filter(Boolean).map(node => ({ kind, node, key: browseEntryKey({ kind, node }) })))
 
 const browseEntryKey = ({ kind, node }) => {
   const id = getXmlAttr({ node, attrName: 'id' })
-  return id === '' ? Symbol(kind) : `${kind}:${id}`
+  return id === '' ? `${kind}:no-id:${JSON.stringify(node)}` : `${kind}:${id}`
 }
 
 const mergeBrowsePages = (pages) => {
@@ -1745,8 +1845,8 @@ const mergeBrowsePages = (pages) => {
 const isNoSuchObject = (error) =>
   error.response?.status === 500 && /<errorCode>\s*(501|701)\s*<\/errorCode>/.test(String(error.response.data ?? ''))
 
-const findDirectories = async ({ apiService, objectId = '0', onFailure }) => {
-  const didlLite = await browseRequest({ apiService, objectId, onFailure })
+const findDirectories = async ({ apiService, objectId = '0', onFailure, onIncomplete, signal }) => {
+  const didlLite = await browseRequest({ apiService, objectId, onFailure, onIncomplete, signal })
   if (!didlLite) return null
   if (!didlLite.container) return []
 
@@ -1761,8 +1861,8 @@ const findDirectories = async ({ apiService, objectId = '0', onFailure }) => {
   })).filter(c => c.id && c.title)
 }
 
-const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show', onFailure }) => {
-  const didlLite = await browseRequest({ apiService, objectId, onFailure, isGoneWhenMissing: true })
+const findItems = async ({ apiService, objectId, showTitle = 'Unknown Show', onFailure, onIncomplete, signal }) => {
+  const didlLite = await browseRequest({ apiService, objectId, onFailure, onIncomplete, signal, isGoneWhenMissing: true })
   if (!didlLite) return []
   if (!didlLite.item) return []
 
